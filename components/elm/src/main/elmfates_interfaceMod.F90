@@ -130,7 +130,7 @@ module ELMFatesInterfaceMod
    use FatesInterfaceTypesMod, only : fates_maxPatchesPerSite
    use FatesHistoryInterfaceMod, only : fates_hist
    use FatesRestartInterfaceMod, only : fates_restart_interface_type
-
+   use FatesInterfaceTypesMod, only : hlm_current_tod
    use PRTGenericMod         , only : num_elements
    use EDTypesMod            , only : ed_patch_type
    use FatesInterfaceTypesMod, only : hlm_stepsize
@@ -155,7 +155,7 @@ module ELMFatesInterfaceMod
    use FatesPlantHydraulicsMod, only : HydrSiteColdStart
    use FatesPlantHydraulicsMod, only : InitHydrSites
    use FatesPlantHydraulicsMod, only : RestartHydrStates
-   use FatesInterfaceMod      , only : hlm_current_tod
+   !   use FatesInterfaceTypeMod      , only : hlm_current_tod
    use dynHarvestMod          , only : num_harvest_vars, harvest_varnames, wood_harvest_units
    use dynHarvestMod          , only : harvest_rates ! these are dynamic in space and time
 
@@ -2232,12 +2232,12 @@ contains
     use shr_log_mod       , only : errMsg => shr_log_errMsg
     use abortutils        , only : endrun
     use decompMod         , only : bounds_type
-    use clm_varcon        , only : rgas, tfrz, namep  
-    use clm_varpar        , only : nlevsoi
-    use clm_varctl        , only : iulog
+    use elm_varcon        , only : rgas, tfrz, namep  
+    use elm_varpar        , only : nlevsoi
+    use elm_varctl        , only : iulog
     use perf_mod          , only : t_startf, t_stopf
     use quadraticMod      , only : quadratic
-    use EDTypesMod        , only : dinc_ed
+    !use EDTypesMod        , only : dinc_ed
     use EDtypesMod        , only : ed_patch_type, ed_cohort_type, ed_site_type
 
     !
@@ -2281,8 +2281,9 @@ contains
          c = this%f2hmap(nc)%fcolumn(s)
 
          do j = 1,nlevsoi
-            this%fates(nc)%bc_in(s)%t_soisno_gl(j)   = t_soisno(c,j)  ! soil temperature (Kelvin)
+            this%fates(nc)%bc_in(s)%t_soisno_sl(j)   = t_soisno(c,j)  ! soil temperature (Kelvin)
          end do
+         
          this%fates(nc)%bc_in(s)%forc_pbot           = forc_pbot(c)   ! atmospheric pressure (Pa)
 
          do ifp = 1, this%fates(nc)%sites(s)%youngest_patch%patchno
@@ -2308,7 +2309,7 @@ contains
             end if
          end do
       end do
-
+   end associate
  end subroutine wrap_insects
 
  ! ======================================================================================
