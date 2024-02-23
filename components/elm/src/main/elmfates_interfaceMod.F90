@@ -2279,17 +2279,17 @@ contains
       do s = 1, this%fates(nc)%nsites
 
          c = this%f2hmap(nc)%fcolumn(s)
-
-         do j = 1,nlevsoi
-            this%fates(nc)%bc_in(s)%t_soisno_sl(j)   = t_soisno(c,j)  ! soil temperature (Kelvin)
-         end do
+         ! Removed 2-23-24 ZR not currently used.
+         !do j = 1,nlevsoi
+         !   this%fates(nc)%bc_in(s)%t_soisno_sl(j)   = t_soisno(c,j)  ! soil temperature (Kelvin)
+         !end do
          
-         this%fates(nc)%bc_in(s)%forc_pbot           = forc_pbot(c)   ! atmospheric pressure (Pa)
+         !this%fates(nc)%bc_in(s)%forc_pbot           = forc_pbot(c)   ! atmospheric pressure (Pa)
 
          do ifp = 1, this%fates(nc)%sites(s)%youngest_patch%patchno
 
             p = ifp+col_pp%pfti(c)
-
+	    
             ! Check to see if this patch is in the filter
             ! Note that this filter is most likely changing size, and getting smaller
             ! and smaller as more patch have converged on solution
