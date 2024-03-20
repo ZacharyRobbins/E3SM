@@ -2266,7 +2266,7 @@ contains
     associate(&
           t_soisno  => temperature_inst%t_soisno_col , &
           t_veg     => temperature_inst%t_veg_patch  , &
-          tgcm      => temperature_inst%thm_patch    , &
+          tgcm      => veg_es%thm                   , &
           forc_pbot => atm2lnd_inst%forc_pbot_downscaled_col, &
           rssun     => photosyns_inst%rssun_patch  , &
           rssha     => photosyns_inst%rssha_patch,   &
