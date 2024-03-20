@@ -2300,10 +2300,10 @@ contains
 	       endif
 
 	    ! Calculating maximum and minimum daily air temperatures at reference height
-	    this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp) &
+	    this%fates(nc)%bc_in(0)%tgcm_max_pa(ifp) &
 	    = max(tgcm(p),this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp))
 
-	    this%fates(nc)%bc_in(s)%tgcm_min_pa(ifp) &
+	    this%fates(nc)%bc_in(0)%tgcm_min_pa(ifp) &
 	    = min(tgcm(p),this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp))
 
             end if
