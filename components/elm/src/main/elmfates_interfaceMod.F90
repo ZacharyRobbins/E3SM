@@ -2266,7 +2266,7 @@ contains
     associate(&
           t_soisno  => temperature_inst%t_soisno_col , &
           t_veg     => temperature_inst%t_veg_patch  , &
-          tgcm      => veg_es%thm                   , &
+          !tgcm      => veg_es%thm                   , &
           forc_pbot => atm2lnd_inst%forc_pbot_downscaled_col, &
           rssun     => photosyns_inst%rssun_patch  , &
           rssha     => photosyns_inst%rssha_patch,   &
@@ -2276,9 +2276,9 @@ contains
 
       nc = bounds_clump%clump_index
 
-      do s = 1, this%fates(nc)%nsites
+  !    do s = 1, this%fates(nc)%nsites
 
-         c = this%f2hmap(nc)%fcolumn(s)
+  !        c = this%f2hmap(nc)%fcolumn(s)
          ! Removed 2-23-24 ZR not currently used.
          !do j = 1,nlevsoi
          !   this%fates(nc)%bc_in(s)%t_soisno_sl(j)   = t_soisno(c,j)  ! soil temperature (Kelvin)
@@ -2286,29 +2286,29 @@ contains
          
          !this%fates(nc)%bc_in(s)%forc_pbot           = forc_pbot(c)   ! atmospheric pressure (Pa)
 
-         do ifp = 1, this%fates(nc)%sites(s)%youngest_patch%patchno
+        ! do ifp = 1, this%fates(nc)%sites(s)%youngest_patch%patchno
 
-            p = ifp+col_pp%pfti(c)
+            !p = ifp+col_pp%pfti(c)
 	    
             ! Check to see if this patch is in the filter
             ! Note that this filter is most likely changing size, and getting smaller
             ! and smaller as more patch have converged on solution
-            if( any(filterp==p) )then
-               if(hlm_current_tod > 0 .and. hlm_current_tod < dtime + 0.001_r8) then
-	            this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp) = -999.0_r8
-		    this%fates(nc)%bc_in(s)%tgcm_min_pa(ifp) = 999.0_r8
-	       endif
+            !if( any(filterp==p) )then
+            !   if(hlm_current_tod > 0 .and. hlm_current_tod < dtime + 0.001_r8) then
+	    !        this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp) = -999.0_r8
+	    !	    this%fates(nc)%bc_in(s)%tgcm_min_pa(ifp) = 999.0_r8
+	    !   endif
 
 	    ! Calculating maximum and minimum daily air temperatures at reference height
-	    this%fates(nc)%bc_in(0)%tgcm_max_pa(ifp) &
-	    = max(tgcm(p),this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp))
+	    !this%fates(nc)%bc_in(0)%tgcm_max_pa(ifp) &
+	    != max(tgcm(p),this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp))
 
-	    this%fates(nc)%bc_in(0)%tgcm_min_pa(ifp) &
-	    = min(tgcm(p),this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp))
+	    !this%fates(nc)%bc_in(0)%tgcm_min_pa(ifp) &
+	    != min(tgcm(p),this%fates(nc)%bc_in(s)%tgcm_max_pa(ifp))
 
-            end if
-         end do
-      end do
+           ! end if
+        ! end do
+      !end do
    end associate
  end subroutine wrap_insects
 
