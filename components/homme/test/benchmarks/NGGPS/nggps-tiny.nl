@@ -12,6 +12,7 @@ nmax = 360
 statefreq=360
 restartfreq   = 43200
 restartfile   = "./R0001"
+theta_hydrostatic_mode=.true.
 runtype       = 0
 tstep=40
 rsplit=3
@@ -32,7 +33,6 @@ hypervis_subcycle=1
 hypervis_subcycle_q=1
 /
 &vert_nl
-vform         = "ccm"
 vfile_mid = './sabm-128.ascii'
 vfile_int = './sabi-128.ascii'
 /

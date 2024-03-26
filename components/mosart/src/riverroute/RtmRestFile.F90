@@ -14,7 +14,7 @@ module RtmRestFile
   use RtmSpmd       , only : masterproc 
   use RtmVar        , only : rtmlon, rtmlat, iulog, inst_suffix, rpntfil, &
                              caseid, nsrest, brnch_retain_casename, &
-                             finidat_rtm, nrevsn_rtm, &
+                             finidat_rtm, nrevsn_rtm, wrmflag, inundflag, &
                              nsrContinue, nsrBranch, nsrStartup, &
                              ctitle, version, username, hostname, conventions, source
   use RtmHistFile   , only : RtmHistRestart
@@ -23,8 +23,11 @@ module RtmRestFile
   use RunoffMod     , only : rtmCTL
   use RtmIO       
   use RtmDateTime
+  use WRM_type_mod  , only : ctlSubwWRM, WRMUnit, StorWater
+  use WRM_subw_io_mod, only : WRM_computeRelease
+
   use rof_cpl_indices , only : nt_rtm, rtm_tracers 
-!
+
 ! !PUBLIC TYPES:
   implicit none
   save
@@ -376,13 +379,36 @@ contains
     ! LOCAL VARIABLES:
     logical :: readvar          ! determine if variable is on initial file
     integer :: nt,nv,n          ! indices
+    integer :: nvmax            ! number of variables to write
+    integer :: ig, idam         ! indices
+    logical :: varok            ! variable ok flag for reading/writing
     real(r8) , pointer :: dfld(:) ! temporary array
+    integer, pointer :: dfld_int(:) ! temporary array
+    logical :: compute_release  ! if release or stormthstop not read
+    logical :: storage_read     ! check if storage on restart file
+    logical :: release_read     ! check if release on restart file
+    logical :: stormth_read     ! check if stormthstop on restart file
     character(len=32)  :: vname,uname
-    character(len=128) :: lname
+    character(len=256) :: lname
     !-----------------------------------------------------------------------
 
-    do nv = 1,7
+    compute_release = .false.
+    storage_read = .true.
+    release_read = .true.
+    stormth_read = .true.
+
+if (wrmflag) then
+    nvmax = 19
+else
+
+    nvmax = 15
+endif
+
+
+    do nv = 1,nvmax
     do nt = 1,nt_rtm
+
+       varok = .true.
 
        if (nv == 1) then
           vname = 'RTM_VOLR_'//trim(rtm_tracers(nt))
@@ -419,26 +445,154 @@ contains
           lname = 'instataneous flow out of main channel in cell'
           uname = 'm3/s'
           dfld  => rtmCTL%erout(:,nt)
+       elseif (nv == 8 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          vname = 'RTM_INUNDFFU_'//trim(rtm_tracers(nt))
+          lname = 'inundation area fraction include channel'
+          uname = 'no unit'
+          dfld  => rtmCTL%inundffunit(:)
+       elseif (nv == 9 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          vname = 'RTM_INUNDWF_'//trim(rtm_tracers(nt))
+          lname = 'inundation fp water volume'
+          uname = 'm3'
+          dfld  => rtmCTL%inundwf(:)
+       elseif (nv == 10 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          vname = 'RTM_INUNDHF_'//trim(rtm_tracers(nt))
+          lname = 'inundation fp water depth'
+          uname = 'm'
+          dfld  => rtmCTL%inundhf(:)
+       elseif (nv == 11 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          vname = 'RTM_INUNDFF_'//trim(rtm_tracers(nt))
+          lname = 'inundation fp area fraction'
+          uname = 'no unit'
+          dfld  => rtmCTL%inundff(:)        
+       elseif (nv == 12 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          vname = 'RTM_MR_'//trim(rtm_tracers(nt))
+          lname = 'mr'
+          uname = 'no unit'
+          dfld  => rtmCTL%mr(:,nt)   
+       elseif (nv == 13 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          vname = 'RTM_YR_'//trim(rtm_tracers(nt))
+          lname = 'yr'
+          uname = 'no unit'
+          dfld  => rtmCTL%yr(:,nt)   
+       elseif (nv == 14 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          vname = 'RTM_PR_'//trim(rtm_tracers(nt))
+          lname = 'pr'
+          uname = 'no unit'
+          dfld  => rtmCTL%pr(:,nt)   
+       elseif (nv == 15 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          vname = 'RTM_RR_'//trim(rtm_tracers(nt))
+          lname = 'rr'
+          uname = 'no unit'
+          dfld  => rtmCTL%rr(:,nt)
+
+          
+       elseif (nv == 16 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          varok = .false.
+          if (wrmflag) then
+             varok = .true.
+             StorWater%storageG = 0._r8
+             if (flag == 'write') then
+                do idam = 1, ctlSubwWRM%localNumDam
+                   ig = WRMUnit%icell(idam)
+                   StorWater%storageG(ig) = StorWater%storage(idam)
+                enddo
+             endif
+             vname = 'DAM_STORAGE_'//trim(rtm_tracers(nt))
+             lname = 'dam storage'
+             uname = 'm3'
+             dfld  => StorWater%storageG(:)
+          endif
+       elseif (nv == 17 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          varok = .false.
+          if (wrmflag) then
+             varok = .true.
+             StorWater%releaseG = 0._r8
+             if (flag == 'write') then
+                do idam = 1, ctlSubwWRM%localNumDam
+                   ig = WRMUnit%icell(idam)
+                   StorWater%releaseG(ig) = StorWater%release(idam)
+                enddo
+             endif
+             vname = 'DAM_RELEASE_'//trim(rtm_tracers(nt))
+             lname = 'dam release'
+             uname = 'm3'
+             dfld  => StorWater%releaseG(:)
+          endif
+       elseif (nv == 18 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          varok = .false.
+          if (wrmflag) then
+             varok = .true.
+             WRMUnit%StorMthStOpG = 0._r8
+             if (flag == 'write') then
+                do idam = 1, ctlSubwWRM%localNumDam
+                   ig = WRMUnit%icell(idam)
+                   WRMUnit%StorMthStOpG(ig) = WRMUnit%StorMthStOp(idam)
+                enddo
+             endif
+             vname = 'DAM_STORMTHSTOP_'//trim(rtm_tracers(nt))
+             lname = 'dam StorMthStOp'
+             uname = 'm3'
+             dfld  => WRMUnit%StorMthStOpG(:)
+          endif        
+       elseif (nv == 19 .and. trim(rtm_tracers(nt)) == 'LIQ') then
+          varok = .false.
+          if (wrmflag) then
+             varok = .true.
+             StorWater%active_stageG = 0._r8
+             if (flag == 'write') then
+                do idam = 1, ctlSubwWRM%localNumDam
+                   ig = WRMUnit%icell(idam)
+                   StorWater%active_stageG(ig) = StorWater%active_stage(idam)
+                enddo
+             endif
+             vname = 'DAM_ACTIVE_'//trim(rtm_tracers(nt))
+             lname = 'dam active stage'
+             uname = 'no unit'
+             dfld_int  => StorWater%active_stageG(:)
+          endif
+          
        else
-          write(iulog,*) 'Rtm ERROR: illegal nv value a ',nv
-          call shr_sys_abort()
+          varok = .false.
        endif
 
+       if (varok) then
        if (flag == 'define') then
+         if (nv == 19) then
+          call ncd_defvar(ncid=ncid, varname=trim(vname), &
+               xtype=ncd_int,  dim1name='rtmlon', dim2name='rtmlat', &
+               long_name=trim(lname), units=trim(uname))
+         else
           call ncd_defvar(ncid=ncid, varname=trim(vname), &
                xtype=ncd_double,  dim1name='rtmlon', dim2name='rtmlat', &
                long_name=trim(lname), units=trim(uname))
+         endif
        else if (flag == 'read' .or. flag == 'write') then
+         if (nv==19) then
+          call ncd_io(varname=trim(vname), data=dfld_int, dim1name='allrof', &
+               ncid=ncid, flag=flag, readvar=readvar)
+         else
           call ncd_io(varname=trim(vname), data=dfld, dim1name='allrof', &
                ncid=ncid, flag=flag, readvar=readvar)
+         endif
           if (flag=='read' .and. .not. readvar) then
              if (nsrest == nsrContinue) then
                 call shr_sys_abort()
              else
                 dfld = 0._r8
+                if (vname == 'DAM_STORAGE_LIQ') then
+                   storage_read = .false.
+                elseif (vname == 'DAM_RELEASE_LIQ') then
+                   release_read = .false.
+                   compute_release = .true.
+                elseif (vname == 'DAM_STORMTHSTOP_LIQ') then
+                   stormth_read = .false.
+                   compute_release = .true.
+                endif
              end if
           end if
        end if
+       end if  ! varok
 
     enddo
     enddo
@@ -453,7 +607,19 @@ contains
              if (abs(rtmCTL%wt(n,nt))      > 1.e30) rtmCTL%wt(n,nt) = 0.
              if (abs(rtmCTL%wr(n,nt))      > 1.e30) rtmCTL%wr(n,nt) = 0.
              if (abs(rtmCTL%erout(n,nt))   > 1.e30) rtmCTL%erout(n,nt) = 0.
-          end do
+             if (abs(rtmCTL%inundffunit(n))> 1.e30) rtmCTL%inundffunit(n) = 0.
+             if (abs(rtmCTL%inundwf(n))    > 1.e30) rtmCTL%inundwf(n) = 0.
+             if (abs(rtmCTL%inundhf(n))    > 1.e30) rtmCTL%inundhf(n) = 0.
+             if (abs(rtmCTL%inundff(n))    > 1.e30) rtmCTL%inundff(n) = 0.
+          end do  ! nt
+
+          if (wrmflag) then
+             if (abs(storWater%storageG(n)) > 1.e30) storWater%storageG(n) = 0.
+             if (abs(storWater%releaseG(n)) > 1.e30) storWater%releaseG(n) = 0.
+             if (abs(WRMUnit%StorMthStOpG(n)) > 1.e30) WRMUnit%StorMthStOpG(n) = 0.
+             if (abs(storWater%active_stageG(n)) > 1.e30) storWater%active_stageG(n) = 0.
+          endif
+
           if (rtmCTL%mask(n) == 1) then
              do nt = 1,nt_rtm
                 rtmCTL%runofflnd(n,nt) = rtmCTL%runoff(n,nt)
@@ -465,8 +631,23 @@ contains
                 rtmCTL%dvolrdtocn(n,nt)= rtmCTL%dvolrdt(n,nt)
              enddo
           endif
-       enddo
-    endif
+       enddo  ! n
+
+
+       if (wrmflag) then
+          do idam = 1, ctlSubwWRM%localNumDam
+             ig = WRMUnit%icell(idam)
+             if (storage_read) StorWater%storage(idam) = StorWater%storageG(ig)
+             if (release_read) StorWater%release(idam) = StorWater%releaseG(ig)
+             if (stormth_read) WRMUnit%StorMthStOp(idam) = WRMUnit%StorMthStOpG(ig)
+             StorWater%active_stage(idam) = StorWater%active_stageG(ig)
+          enddo
+          if (compute_release) then
+             call WRM_computeRelease()
+          endif
+       endif
+
+    endif  ! read
 
   end subroutine RtmRestart
 

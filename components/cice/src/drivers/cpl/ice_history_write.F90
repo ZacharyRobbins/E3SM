@@ -491,7 +491,7 @@
          time_bounds=(/time_beg(ns),time_end(ns)/)
          bnd_start=(/1,1/)
          bnd_length=(/2,1/)
-         status = pio_put_var(File,varid,start=bnd_start(:),count=bnd_length(:),ival=time_bounds) 
+         status = pio_put_var(File,varid,bnd_start(:),bnd_length(:),time_bounds)
       endif
       
       !-----------------------------------------------------------------
@@ -621,6 +621,12 @@
          endif
       enddo ! num_avail_hist_fields
 
+      ! -------------------------
+      ! clean-up PIO descriptors
+      ! -------------------------
+      call pio_freedecomp(File,iodesc2d)
+      call pio_freedecomp(File,iodesc3d)
+
       !-----------------------------------------------------------------
       ! close output dataset
       !-----------------------------------------------------------------
@@ -641,12 +647,6 @@
 !    msize0,' MB (highwater) ',mrss0,' MB (usage)'
 !     endif
       
-      ! -------------------------
-      ! clean-up PIO descriptors
-      ! -------------------------
-      call pio_freedecomp(File,iodesc2d)
-      call pio_freedecomp(File,iodesc3d)
-
       !-------------------------
       !  Test memory usage
       !-------------------------

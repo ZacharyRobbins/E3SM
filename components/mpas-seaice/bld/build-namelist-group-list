@@ -6,13 +6,14 @@ my @groups = qw(seaice_model
                 initialize
                 use_sections
                 forcing
-                unit_test
+                testing
                 velocity_solver
                 advection
                 column_package
                 column_tracers
                 biogeochemistry
                 shortwave
+                snow
                 meltponds
                 thermodynamics
                 itd
@@ -20,6 +21,7 @@ my @groups = qw(seaice_model
                 atmosphere
                 ocean
                 diagnostics
+                prescribed_ice
                 am_highfrequencyoutput
                 am_temperatures
                 am_regionalstatistics

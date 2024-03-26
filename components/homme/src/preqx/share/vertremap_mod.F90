@@ -39,7 +39,6 @@ contains
   use control_mod,    only: rsplit
   use hybrid_mod,     only: hybrid_t
 
-
   type (hybrid_t),  intent(in)    :: hybrid  ! distributed parallel structure (shared)
   type (element_t), intent(inout) :: elem(:)
   type (hvcoord_t)                :: hvcoord
@@ -72,6 +71,7 @@ contains
   ! hence:
   !    (dp_star(k)-dp(k))/dt_q = (eta_dot_dpdn(i,j,k+1) - eta_dot_dpdn(i,j,k) )
   !
+  
    do ie=nets,nete
      ! update final ps_v
      elem(ie)%state%ps_v(:,:,np1) = hvcoord%hyai(1)*hvcoord%ps0 + &
@@ -114,7 +114,7 @@ contains
         ttmp(:,:,:,1)=ttmp(:,:,:,1)*dp_star
 
         call t_startf('vertical_remap1_1')
-        call remap1(ttmp,np,1,dp_star,dp)
+        call remap1(ttmp,np,1,dp_star,dp,vert_remap_q_alg)
         call t_stopf('vertical_remap1_1')
 
         elem(ie)%state%t(:,:,:,np1)=ttmp(:,:,:,1)/dp
@@ -123,7 +123,7 @@ contains
         ttmp(:,:,:,2)=elem(ie)%state%v(:,:,2,:,np1)*dp_star
 
         call t_startf('vertical_remap1_2')
-        call remap1(ttmp,np,2,dp_star,dp)
+        call remap1(ttmp,np,2,dp_star,dp,vert_remap_q_alg)
         call t_stopf('vertical_remap1_2')
 
         elem(ie)%state%v(:,:,1,:,np1)=ttmp(:,:,:,1)/dp
@@ -138,13 +138,21 @@ contains
      endif
 
      ! remap the gll tracers from lagrangian levels (dp_star)  to REF levels dp
-     if (qsize>0) then
+     if (qsize>0 .and. np1_qdp > 0) then
 
        call t_startf('vertical_remap1_3')
-       call remap1(elem(ie)%state%Qdp(:,:,:,:,np1_qdp),np,qsize,dp_star,dp)
+       call remap1(elem(ie)%state%Qdp(:,:,:,:,np1_qdp),np,qsize,dp_star,dp,vert_remap_q_alg)
        call t_stopf('vertical_remap1_3')
 
+       !dir$ simd
+       do q=1,qsize
+          elem(ie)%state%Q(:,:,:,q)=elem(ie)%state%Qdp(:,:,:,q,np1_qdp)/dp(:,:,:)
+       enddo
      endif
+
+     ! reinitialize dp3d after remap
+     elem(ie)%state%dp3d(:,:,:,np1)=dp(:,:,:)
+
   enddo
   call t_stopf('vertical_remap')
   end subroutine vertical_remap

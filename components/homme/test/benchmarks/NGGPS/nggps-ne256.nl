@@ -14,6 +14,8 @@ disable_diagnostics = .true.
 restartfreq   = 43200
 restartfile   = "./R0001"
 runtype       = 0
+theta_hydrostatic_mode=.true.
+theta_advect_form = 1
 tstep=40
 rsplit=3
 qsplit = 1
@@ -33,7 +35,6 @@ hypervis_subcycle=1
 hypervis_subcycle_q=1
 /
 &vert_nl
-vform         = "ccm"
 vfile_mid = './sabm-128.ascii'
 vfile_int = './sabi-128.ascii'
 /

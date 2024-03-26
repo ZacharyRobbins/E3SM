@@ -19,7 +19,7 @@ rsplit=2       ! ne30: 3   ne120:  2
 qsplit = 1
 tstep_type = 5
 integration   = "explicit"
-theta_hydrostatic_mode=.false.
+theta_hydrostatic_mode=.true.
 nu=1e13
 nu_div=2.5e13
 nu_p=1e13
@@ -27,14 +27,13 @@ nu_q=1e13
 nu_s=1e13
 nu_top = 2.5e5
 se_ftype     = 0
-limiter_option = 8
+limiter_option = 9
 vert_remap_q_alg = 1
 hypervis_scaling=0
 hypervis_order = 2
 hypervis_subcycle=4    ! ne30: 3  ne120: 4
 /
 &vert_nl
-vform         = "ccm"
 vfile_mid = './acme-72m.ascii'
 vfile_int = './acme-72i.ascii'
 /

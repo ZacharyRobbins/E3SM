@@ -20,10 +20,11 @@ module glc_comp_mct
   use seq_cdata_mod
   use seq_infodata_mod
   use seq_timemgr_mod
-  use seq_comm_mct,      only : seq_comm_suffix, seq_comm_inst, seq_comm_name
+  use seq_comm_mct,      only : seq_comm_suffix, seq_comm_inst, seq_comm_name, info_taskmap_comp
   use shr_file_mod
   use shr_cal_mod,       only : shr_cal_date2ymd
   use shr_sys_mod
+  use shr_taskmap_mod,   only : shr_taskmap_write
   use shr_pio_mod
   use perf_mod
 
@@ -71,7 +72,7 @@ module glc_comp_mct
 
   integer  :: nsend, nrecv
 
-  character(len=StrKIND) :: runtype  !< ACME run type: initial, continue, branch
+  character(len=StrKIND) :: runtype  !< E3SM run type: initial, continue, branch
   character(len=StrKIND) :: coupleTimeStamp
 
   type(seq_infodata_type), pointer :: infodata  ! coupler infodata
@@ -134,12 +135,13 @@ contains
     character(len=StrKIND) :: cpl_seq_option
 
     type (MPAS_Time_Type) :: currTime
-    integer :: iam, ierr, ierr_local
+    integer :: iam, npes, ierr, ierr_local
     integer :: iyear0, imonth0
     character(len=StrKIND)  :: starttype          ! infodata start type
     character(len=StrKIND)  :: timeStamp
     character(len=StrKIND)  :: nml_filename
     character(len=16) :: inst_suffix
+    integer :: inst_index
     integer :: lbnum
 
     type (MPAS_Time_Type) :: alarmStartTime
@@ -151,6 +153,7 @@ contains
                                       averagePool
 
     logical :: exists
+    logical :: verbose_taskmap_output                ! true then use verbose task-to-node mapping format
 
     character(kind=c_char), dimension(StrKIND+1) :: c_filename       ! StrKIND+1 for C null-termination character
     integer(kind=c_int) :: c_comm
@@ -166,6 +169,8 @@ contains
     character(kind=c_char), dimension(StrKIND+1) :: c_ref_time_temp
     character(kind=c_char), dimension(StrKIND+1) :: c_filename_interval_temp
     character(kind=c_char), dimension(StrKIND+1) :: c_iotype
+    character(len=8) :: c_inst_index ! instance number
+    character(len=8) :: c_npes       ! number of pes
     type (MPAS_Time_type) :: start_time
     type (MPAS_Time_type) :: ref_time
     type (MPAS_TimeInterval_type) :: filename_interval
@@ -283,6 +288,38 @@ contains
 
     call mpas_framework_init_phase1(domain % dminfo, mpicom_g)
 
+    ! Identify SMP nodes and process/SMP mapping for this instance
+    ! (Assume that processor names are SMP node names on SMP clusters.)
+    inst_index = seq_comm_inst(glcID)
+    write(c_inst_index,'(i8)') inst_index
+
+    if (info_taskmap_comp > 0) then
+
+       if (info_taskmap_comp == 1) then
+          verbose_taskmap_output = .false.
+       else
+          verbose_taskmap_output = .true.
+       endif
+
+       call MPI_comm_size(mpicom_g,npes,ierr)
+       write(c_npes,'(i8)') npes
+
+       if (iam==0) then
+          write(glcLogUnit,'(/,3A)') &
+             trim(adjustl(c_npes)), &
+             ' pes participating in computation of MPAS-ALBANY-LANDICE instance #', &
+             trim(adjustl(c_inst_index))
+          call shr_sys_flush(glcLogUnit)
+       endif
+
+       call t_startf("shr_taskmap_write")
+       call shr_taskmap_write(glcLogUnit, mpicom_g,                 &
+                              'GLC #'//trim(adjustl(c_inst_index)), &
+                              verbose=verbose_taskmap_output        )
+       call t_stopf("shr_taskmap_write")
+
+    endif
+
     ! Setup function pointers for MALI core and domain types
     call li_setup_core(corelist)
     call li_setup_domain(domain)
@@ -296,7 +333,7 @@ contains
     end if
 
     ! Set core specific options here
-    ! Disable output from all but the master task for ACME!
+    ! Disable output from all but the master task for E3SM!
     ! (This overrides the default set by mpas_log_init based on MPAS_DEBUG setting.)
     if (iam /= 0) then
        domain % logInfo % outputLog % isActive = .false.
@@ -752,7 +789,7 @@ contains
 !!  local variables
 !!
 !!-----------------------------------------------------------------------
-! Variables related to ACME coupler
+! Variables related to E3SM coupler
       integer :: shrloglev, shrlogunit
 
 ! Variable related to MALI
@@ -1332,7 +1369,7 @@ contains
    integer, pointer :: nCellsSolve
 
    real (kind=RKIND), dimension(:), pointer :: sfcMassBal,&
-                                               basalOceanMassBal,&
+                                               floatingBasalMassBal,&
                                                surfaceTemperature,&
                                                basalOceanHeatflx,&
                                                OceanDensity
@@ -1348,31 +1385,26 @@ contains
 
          ! Get variables from pools
          call mpas_pool_get_subpool(block % structs, 'geometry', geometryPool)
-         !call mpas_pool_get_subpool(block % structs, 'thermal', thermalPool)
+         call mpas_pool_get_subpool(block % structs, 'thermal', thermalPool)
 
          call mpas_pool_get_array(geometryPool, 'sfcMassBal', sfcMassBal)
-         !call mpas_pool_get_array(geometryPool, 'basalOceanMassBal',basalOceanMassBal)
-         !call mpas_pool_get_array(thermalPool, 'surfaceTemperature',surfaceTemperature)
-         !call mpas_pool_get_array(thermalPool, 'basalOceanHeatflx',basalOceanHeatflx)
+         call mpas_pool_get_array(geometryPool, 'floatingBasalMassBal',floatingBasalMassBal)
+         call mpas_pool_get_array(thermalPool, 'surfaceTemperature',surfaceTemperature)
+!         call mpas_pool_get_array(thermalPool, 'basalOceanHeatflx',basalOceanHeatflx)
          !call mpas_pool_get_array(geometryPool, 'OceanDensity',OceanDensity)
 
          do i = 1, nCellsSolve
             n = n + 1
             sfcMassBal(i) = x2g_g % rAttr(index_x2g_Flgl_qice, n)
-            !basalOceanMassBal(i) = x2g_g % rAttr(index_x2g_Fogo_qicel, n)
-            !surfaceTemperature(i) = x2g_g % rAttr(index_x2g_Sl_tsrf, n)
-            !basalOceanHeatflx(i) = x2g_g % rAttr(index_x2g_Fogo_qiceh, n)
+            floatingBasalMassBal(i) = x2g_g % rAttr(index_x2g_Fogx_qiceli, n)
+!            surfaceTemperature(i) = x2g_g % rAttr(index_x2g_Sl_tsrf, n)
+!JW            basalOceanHeatflx(i) = x2g_g % rAttr(index_x2g_Fogo_qiceh, n)
+!            basalOceanHeatflx(i) = x2g_g % rAttr(index_x2g_Fogx_qicehi, n)
             !OceanDensity (i) = x2g_g % rAttr(, n)
          end do
 
          block => block % next
     end do
-
-
-!Need to loop over blocks
-!Jer: Need to define local pointers to MPAS-LI arrays, get these arrays, and point to them with local pointers
-!Jer: Need to assign local pointers to x2g arrays (as in CESM)
-!Jer: then, need to re-get forcingPool fields and call maps_dmpar_exch_halo_field on them
 
   end subroutine glc_import_mct
 
@@ -1399,10 +1431,14 @@ contains
 
    type (mpas_pool_type), pointer :: meshPool
    type (mpas_pool_type), pointer :: geometryPool
+   type (mpas_pool_type), pointer :: thermalPool
 
-   integer, pointer :: nCellsSolve
+   integer, pointer :: nCellsSolve, nVertLevels
 
    real (kind=RKIND), dimension(:), pointer :: upperSurface
+   real (kind=RKIND), dimension(:), pointer :: layerThicknessFractions
+   real (kind=RKIND), dimension(:), pointer :: thickness
+   real (kind=RKIND), dimension(:,:), pointer :: temperature
    integer, dimension(:), pointer :: cellMask
    !-------------------------------------------------------------------
 
@@ -1416,16 +1452,36 @@ contains
     do while (associated(block))
          call mpas_pool_get_subpool(block % structs, 'mesh', meshPool)
          call mpas_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+         call mpas_pool_get_dimension(meshPool, 'nVertLevels', nVertLevels)
 
          ! Get variables from pools
          call mpas_pool_get_subpool(block % structs, 'geometry', geometryPool)
+         call mpas_pool_get_subpool(block % structs, 'thermal',  thermalPool)
 
          call mpas_pool_get_array(geometryPool, 'upperSurface', upperSurface)
+         call mpas_pool_get_array(meshPool, 'layerThicknessFractions', layerThicknessFractions)
+         call mpas_pool_get_array(geometryPool, 'thickness', Thickness, timeLevel = 1)
+         call mpas_pool_get_array(thermalPool, 'temperature', temperature)
+
          call mpas_pool_get_array(geometryPool, 'cellMask', cellMask)
 
          do i = 1, nCellsSolve
             n = n + 1
-            g2x_g % rAttr(index_g2x_Sg_topo, n) = upperSurface(i)
+
+            !call route_ice_runoff(0.0_RKIND, & !Recuperate runoff routing switch code (originally in glc_route_ice_runoff module in earlier code), and attach to ice calving flux once present...
+            !                      rofi_to_ocn=Fogg_rofi, &
+            !                      rofi_to_ice=Figg_rofi)
+            g2x_g % rAttr(index_g2x_Fogg_rofi,n)=0.0 !...and remove these placeholders
+            g2x_g % rAttr(index_g2x_Figg_rofi,n)=0.0 !...and remove these placeholders
+            g2x_g % rAttr(index_g2x_Fogg_rofl,n) = 0.0 !Attach to subglacial liquid flux once present
+
+            g2x_g % rAttr(index_g2x_Sg_topo, n) = max(0.0, upperSurface(i)) !updated to avoid warning for values below sea level
+            g2x_g % rAttr(index_g2x_Sg_tbot, n) = temperature(nVertlevels,i) - SHR_CONST_TKTRIP
+            ! layerThickness is not populated on init, so calculating like this instead:
+            g2x_g % rAttr(index_g2x_Sg_dztbot, n) = layerThicknessFractions(nVertLevels) * thickness(i) / 2.0
+            g2x_g % rAttr(index_g2x_Sg_lithop, n) = Thickness(i)*SHR_CONST_RHOICE*SHR_CONST_G
+
+            !!!Mask configurations
             g2x_g % rAttr(index_g2x_Sg_ice_covered, n) = li_mask_is_ice_int(cellMask(i))
             ! Sg_icemask should be 1 in locations where GLC will use a SMB value
             ! This is cells with ice or bare land (no ocean cells)
@@ -1441,6 +1497,10 @@ contains
             ! If we add in the ability to prevent the ice sheet from evolving
             ! (i.e., to ignore these fluxes) then this should be set to 0 everywhere.
             g2x_g % rAttr(index_g2x_Sg_icemask_coupled_fluxes, n) = g2x_g % rAttr(index_g2x_Sg_icemask, n)
+
+            ! Add masks used for ice shelf basal melt calculation
+            g2x_g % rAttr(index_g2x_Sg_icemask_floating, n) = li_mask_is_floating_ice_int(cellMask(i))
+            g2x_g % rAttr(index_g2x_Sg_icemask_grounded, n) = li_mask_is_grounded_ice_int(cellMask(i))
 
          end do
 
@@ -1480,7 +1540,7 @@ contains
        call mpas_log_write('MPAS ymd=$i  MPAS tod=$i', MPAS_LOG_ERR, intArgs=(/ymd, tod/))
        call mpas_log_write('sync ymd=$i  sync tod=$i', MPAS_LOG_ERR, intArgs=(/curr_ymd, curr_tod/))
        call mpas_log_write('Internal mpas clock not in sync with sync clock', MPAS_LOG_ERR)
-       call mpas_log_write("Internal MPAS clock not in sync with ACME sync clock. Aborting...", MPAS_LOG_CRIT)
+       call mpas_log_write("Internal MPAS clock not in sync with E3SM sync clock. Aborting...", MPAS_LOG_CRIT)
     end if
 
    end subroutine check_clocks_sync
@@ -1528,6 +1588,9 @@ contains
       character (len=StrKIND), pointer :: charAtt
       real (kind=RKIND), pointer :: realAtt
       character (len=StrKIND) :: histAtt
+      character (len=StrKIND) :: caseid, model_version, hostname, username, &
+                                 timeString
+      character (len=8) :: curdate, curtime
 
       integer :: local_ierr
 
@@ -1545,6 +1608,40 @@ contains
           write(histAtt, '(A,I6,A,A,A)') 'mpirun -n ', domain % dminfo % nProcs, ' ./', trim(domain % core % coreName), '_model'
       end if
 
+      call seq_infodata_GetData(infodata,case_name=caseid, &
+                                 model_version=model_version, &
+                                 username=username, &
+                                 hostname=hostname)
+
+       !Add E3SM run specific variables to MPAS output files
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'title', 'MPAS-Albany-Landice output file information')
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'source', 'E3SM MPAS-Albany-Landice Model')
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'source_id', trim(model_version))
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'product', 'model-output')
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'realm', 'landIce')
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'case', trim(caseid))
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'username', trim(username))
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'hostname', trim(hostname))
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'git_version', trim(model_version))
+       call datetime(curdate, curtime)
+       timeString = 'created on ' // curdate // ' ' // curtime
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'history', trim(timeString))
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'Conventions', 'CF-1.7')
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'institution_id', 'E3SM-Project')
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'institution', &
+           'LLNL (Lawrence Livermore National Laboratory, Livermore, CA 94550, USA); &
+           &ANL (Argonne National Laboratory, Argonne, IL 60439, USA); &
+           &BNL (Brookhaven National Laboratory, Upton, NY 11973, USA); &
+           &LANL (Los Alamos National Laboratory, Los Alamos, NM 87545, USA); &
+           &LBNL (Lawrence Berkeley National Laboratory, Berkeley, CA 94720, USA); &
+           &ORNL (Oak Ridge National Laboratory, Oak Ridge, TN 37831, USA); &
+           &PNNL (Pacific Northwest National Laboratory, Richland, WA 99352, USA); &
+           &SNL (Sandia National Laboratories, Albuquerque, NM 87185, USA). &
+           &Mailing address: LLNL Climate Program, c/o David C. Bader, &
+           &Principal Investigator, L-103, 7000 East Avenue, Livermore, CA 94550, USA')
+       call MPAS_stream_mgr_add_att(domain % streamManager, 'contact', &
+           'e3sm-data-support@listserv.llnl.gov')
+
 
       call MPAS_stream_mgr_add_att(stream_manager, 'on_a_sphere', domain % on_a_sphere)
       call MPAS_stream_mgr_add_att(stream_manager, 'sphere_radius', domain % sphere_radius)
@@ -1552,13 +1649,8 @@ contains
       call MPAS_stream_mgr_add_att(stream_manager, 'core_name', domain % core % coreName)
       ! DWJ 10/01/2014: Eventually add the real history attribute, for now (due to length restrictions)
       ! add a shortened version.
-!     call MPAS_stream_mgr_add_att(stream_manager, 'history', domain % history)
-      call MPAS_stream_mgr_add_att(stream_manager, 'history', histAtt)
-      call MPAS_stream_mgr_add_att(stream_manager, 'source', domain % core % source)
-      call MPAS_stream_mgr_add_att(stream_manager, 'Conventions', domain % core % conventions)
       call MPAS_stream_mgr_add_att(stream_manager, 'parent_id', domain % parent_id)
       call MPAS_stream_mgr_add_att(stream_manager, 'mesh_spec', domain % mesh_spec)
-      call MPAS_stream_mgr_add_att(stream_manager, 'git_version', domain % core % git_version)
 
       call mpas_pool_begin_iteration(domain % configs)
 
@@ -1589,6 +1681,28 @@ contains
 
    end subroutine add_stream_attributes!}}}
 
+   subroutine datetime(cdate, ctime)!{{{
+
+       implicit none
+
+       character, intent(out) :: cdate*8, ctime*8
+
+       integer, dimension(8) :: values
+       character :: date*8, time*10, zone*5
+
+       call date_and_time (date, time, zone, values)
+       cdate(1:2) = date(5:6)
+       cdate(3:3) = '/'
+       cdate(4:5) = date(7:8)
+       cdate(6:6) = '/'
+       cdate(7:8) = date(3:4)
+       ctime(1:2) = time(1:2)
+       ctime(3:3) = ':'
+       ctime(4:5) = time(3:4)
+       ctime(6:6) = ':'
+       ctime(7:8) = time(5:6)
+
+    end subroutine datetime!}}}
 
 end module glc_comp_mct
 

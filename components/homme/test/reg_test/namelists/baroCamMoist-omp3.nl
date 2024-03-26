@@ -27,7 +27,7 @@ hypervis_subcycle            = 4
 u_perturb                    = 1
 vert_remap_q_alg = 1
 ! disable_diagnostics          = .true.
-moisture = 'notdry'
+moisture = 'wet'
 /
 
 
@@ -36,7 +36,6 @@ filter_freq   = 0
 /
 
 &vert_nl
-vform         = "ccm"
 vfile_mid     = "vcoord/camm-26.ascii"
 vfile_int     = "vcoord/cami-26.ascii"
 /

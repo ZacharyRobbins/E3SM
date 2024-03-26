@@ -3,61 +3,59 @@
 # 2017/11 MT:  Set NETCDF and PNETCDF paths using same approach as CIME
 #              Rely on CIME's FindNetCDF and FindPnetCDF for all remaining config
 #
-# tested 2017/11 with the following in .soft:
-#
-# +intel-17.0.0
-# +mvapich2-2.2-intel-17.0.0-acme
-# +netcdf-c-4.4.1-f77-4.4.4-intel-17.0.0-serial
-# +pnetcdf-1.7.0-intel-17.0.0-mvapich2-2.2-acme
-#
-#
-SET (CMAKE_Fortran_COMPILER mpif90 CACHE FILEPATH "")
-SET (CMAKE_C_COMPILER mpicc CACHE FILEPATH "")
-SET (CMAKE_CXX_COMPILER mpicxx CACHE FILEPATH "")
+EXECUTE_PROCESS(COMMAND which mpiifort RESULT_VARIABLE MPIIFORT_RESULT)
+EXECUTE_PROCESS(COMMAND which ifort    RESULT_VARIABLE IFORT_RESULT)
+IF (${MPIIFORT_RESULT} EQUAL 0 AND ${IFORT_RESULT} EQUAL 0)
+  MESSAGE(STATUS "Found Intel compiler and Intel MPI: building with mpiifort/mpiicc/mpiicpc")
+  SET (CMAKE_Fortran_COMPILER mpiifort CACHE FILEPATH "")
+  SET (CMAKE_C_COMPILER       mpiicc   CACHE FILEPATH "")
+  SET (CMAKE_CXX_COMPILER     mpiicpc  CACHE FILEPATH "")
+ELSE()
+  MESSAGE(STATUS "Did not detect ifort or mpiifort: building with mpif90/mpicc/mpicxx")
+  SET (CMAKE_Fortran_COMPILER mpif90   CACHE FILEPATH "")
+  SET (CMAKE_C_COMPILER       mpicc    CACHE FILEPATH "")
+  SET (CMAKE_CXX_COMPILER     mpicxx   CACHE FILEPATH "")
+ENDIF()
 
+# Set kokkos arch, to get correct avx flags
+SET (Kokkos_ARCH_BDW ON CACHE BOOL "")
 
-# anvil uses softenv, which does not set environment variables but sets
-# up path for executables. Compute NETCDF_DIR, PNETCDF_DIR
+SET (WITH_PNETCDF FALSE CACHE FILEPATH "")
+#
+# anvil module system doesn't set environment variables, but will put
+# nc-config in our path.  anvil seperates C and Fortran libraries,
+# so we need to set both paths instead of NETCDF_DIR
+#
 EXECUTE_PROCESS(COMMAND nf-config --prefix
   RESULT_VARIABLE NFCONFIG_RESULT
-  OUTPUT_VARIABLE NETCDF_PATH
+  OUTPUT_VARIABLE NFCONFIG_OUTPUT
   ERROR_VARIABLE  NFCONFIG_ERROR
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
-IF (${NFCONFIG_ERROR})
-  MESSAGE(WARNING "nf-config --prefix produced an error. Default linking will be used.")
-ELSE()
-  MESSAGE("-- NETCDF_PATH = ${NETCDF_PATH}")
-  SET (NETCDF_DIR ${NETCDF_PATH} CACHE FILEPATH "")
-ENDIF ()
+SET (NetCDF_Fortran_PATH "${NFCONFIG_OUTPUT}" CACHE STRING "")
 
-EXECUTE_PROCESS(COMMAND which pnetcdf_version
-  COMMAND xargs dirname
-  COMMAND xargs dirname
-  RESULT_VARIABLE NFCONFIG_RESULT
-  OUTPUT_VARIABLE PNETCDF_PATH
-  ERROR_VARIABLE  NFCONFIG_ERROR
+EXECUTE_PROCESS(COMMAND nc-config --prefix
+  RESULT_VARIABLE NCCONFIG_RESULT
+  OUTPUT_VARIABLE NCCONFIG_OUTPUT
+  ERROR_VARIABLE  NCCONFIG_ERROR
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
-IF (${NFCONFIG_ERROR})
-  MESSAGE(WARNING "which pnetcdf_version produced an error. PNETCDF disabled.")
-  SET (WITH_PNETCDF FALSE CACHE FILEPATH "")
+SET (NetCDF_C_PATH "${NCCONFIG_OUTPUT}" CACHE STRING "")
+
+IF (${IFORT_RESULT} EQUAL 0)
+  SET (ADD_Fortran_FLAGS "-traceback" CACHE STRING "")
+  SET (ADD_C_FLAGS       "-traceback" CACHE STRING "")
+  SET (ADD_CXX_FLAGS     "-traceback" CACHE STRING "")
+  SET (HOMME_USE_MKL "TRUE" CACHE FILEPATH "") # for Intel
 ELSE()
-  MESSAGE("-- PNETCDF_PATH = ${PNETCDF_PATH}")
-  SET (PNETCDF_DIR ${PNETCDF_PATH} CACHE FILEPATH "")
-ENDIF ()
+  SET (MKLROOT $ENV{MKLROOT} CACHE FILEPATH "")
+  SET (HOMME_FIND_BLASLAPACK TRUE CACHE BOOL "")
+endif()
 
-
-
-SET (HOMME_USE_MKL "TRUE" CACHE FILEPATH "") # for Intel
+SET (USE_MPIEXEC "srun" CACHE STRING "")
+SET (USE_MPI_OPTIONS "-K --cpu_bind=cores" CACHE STRING "")
 SET (USE_QUEUING FALSE CACHE BOOL "")
 # for standalone HOMME builds:
-SET (CPRNC_DIR /home/ccsm-data/tools CACHE FILEPATH "")
-
-# suppress "-openmp deprecated" warning number 10411
-SET (ADD_Fortran_FLAGS "-diag-disable 10411" CACHE STRING "")
-SET (ADD_C_FLAGS "-diag-disable 10411" CACHE STRING "")
-SET (ADD_CXX_FLAGS "-diag-disable 10411" CACHE STRING "")
-
+SET (CPRNC_DIR /lcrc/group/e3sm/soft/tools/cprnc CACHE FILEPATH "")
 
 

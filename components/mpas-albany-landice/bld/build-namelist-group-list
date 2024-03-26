@@ -1,7 +1,9 @@
 my @groups = qw(velocity_solver
                 advection
+                solidearth
                 calving
                 thermal_solver
+                iceshelf_melt
                 physical_parameters
                 time_integration
                 time_management

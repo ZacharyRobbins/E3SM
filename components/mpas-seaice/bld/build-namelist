@@ -3,7 +3,7 @@
 #
 # build-namelist
 #
-# This script builds the namelists for the MPASSI configuration of ACME.
+# This script builds the namelists for the MPASSI configuration of E3SM.
 #
 # build-namelist uses a config_cache.xml file that current contains the seaice grid information.
 # build-namelist reads this file to obtain information it needs to provide
@@ -51,11 +51,15 @@ OPTIONS
                            If not defined, location is set as \$ProgDir or \$cwd
                            (Needed to run build-namelist from SourceMods dir)
      -inst_string          inst_string variable
-     -ic_mode              variable for initial condition file mode
+     -ice_ic_mode          variable for initial condition file mode
                            Options are: spunup, cold_start
      -ice_bgc              variable for enabling sea ice BGC
      -surface_mode         variable for surface mode
                            Options are: free, non-free
+     -iceberg_mode         variable for iceberg mode
+                           Options are: none, data, prognostic
+     -prognostic_mode      variable for prognostic mode
+                           Options are: full, prescribed
      -ntasks_ice           NTASKS_ICE for this case
      -ninst_ice            NINST_ICE for this case
 
@@ -88,44 +92,48 @@ if ($ProgDir) {
 
 # Process command-line options.
 
-my %opts = ( help          => 0,
-             test          => 0,
-             verbose       => 0,
-             preview       => 0,
-             caseroot      => undef,
-             casebuild     => undef,
-             cimeroot      => undef,
-             inst_string   => undef,
-             ice_grid      => undef,
-             decomp_prefix => undef,
-             date_stamp    => undef,
-             ic_mode       => undef,
-             ice_bgc       => undef,
-             surface_mode  => undef,
-             cfg_dir       => $cfgdir,
-             ntasks_ice    => 0,
-             ninst_ice     => 0,
+my %opts = ( help            => 0,
+             test            => 0,
+             verbose         => 0,
+             preview         => 0,
+             caseroot        => undef,
+             casebuild       => undef,
+             cimeroot        => undef,
+             inst_string     => undef,
+             ice_grid        => undef,
+             decomp_prefix   => undef,
+             date_stamp      => undef,
+             ice_ic_mode     => undef,
+             ice_bgc         => undef,
+             surface_mode    => undef,
+             iceberg_mode    => undef,
+             prognostic_mode => undef,
+             cfg_dir         => $cfgdir,
+             ntasks_ice      => 0,
+             ninst_ice       => 0,
            );
 
 GetOptions(
-    "h|help"          => \$opts{'help'},
-    "infile=s"        => \$opts{'infile'},
-    "namelist=s"      => \$opts{'namelist'},
-    "v|verbose"       => \$opts{'verbose'},
-    "caseroot=s"      => \$opts{'caseroot'},
-    "casebuild=s"     => \$opts{'casebuild'},
-    "cimeroot=s"      => \$opts{'cimeroot'},
-    "inst_string=s"   => \$opts{'inst_string'},
-    "ice_grid=s"      => \$opts{'ice_grid'},
-    "decomp_prefix=s" => \$opts{'decomp_prefix'},
-    "date_stamp=s"    => \$opts{'date_stamp'},
-    "ic_mode=s"       => \$opts{'ic_mode'},
-    "ice_bgc=s"       => \$opts{'ice_bgc'},
-    "surface_mode=s"  => \$opts{'surface_mode'},
-    "cfg_dir=s"       => \$opts{'cfg_dir'},
-    "preview"         => \$opts{'preview'},
-    "ntasks_ice=i"    => \$opts{'ntasks_ice'},
-    "ninst_ice=i"     => \$opts{'ninst_ice'},
+    "h|help"            => \$opts{'help'},
+    "infile=s"          => \$opts{'infile'},
+    "namelist=s"        => \$opts{'namelist'},
+    "v|verbose"         => \$opts{'verbose'},
+    "caseroot=s"        => \$opts{'caseroot'},
+    "casebuild=s"       => \$opts{'casebuild'},
+    "cimeroot=s"        => \$opts{'cimeroot'},
+    "inst_string=s"     => \$opts{'inst_string'},
+    "ice_grid=s"        => \$opts{'ice_grid'},
+    "decomp_prefix=s"   => \$opts{'decomp_prefix'},
+    "date_stamp=s"      => \$opts{'date_stamp'},
+    "ice_ic_mode=s"     => \$opts{'ice_ic_mode'},
+    "ice_bgc=s"         => \$opts{'ice_bgc'},
+    "surface_mode=s"    => \$opts{'surface_mode'},
+    "iceberg_mode=s"    => \$opts{'iceberg_mode'},
+    "prognostic_mode=s" => \$opts{'prognostic_mode'},
+    "cfg_dir=s"         => \$opts{'cfg_dir'},
+    "preview"           => \$opts{'preview'},
+    "ntasks_ice=i"      => \$opts{'ntasks_ice'},
+    "ninst_ice=i"       => \$opts{'ninst_ice'},
 )  or usage();
 
 # Give usage message.
@@ -149,19 +157,21 @@ my $eol = "\n";
 
 if ($print>=2) { print "Setting MPASSI configuration script directory to $cfgdir$eol"; }
 
-my $CASEROOT      = $opts{'caseroot'};
-my $CASEBUILD     = $opts{'casebuild'};
-my $CIMEROOT      = $opts{'cimeroot'};
-my $inst_string   = $opts{'inst_string'};
-my $ICE_GRID      = $opts{'ice_grid'};
-my $decomp_prefix = $opts{'decomp_prefix'};
-my $date_stamp    = $opts{'date_stamp'};
-my $ic_mode       = $opts{'ic_mode'};
-my $ice_bgc       = $opts{'ice_bgc'};
-my $surface_mode  = $opts{'surface_mode'};
-my $NINST_ICE     = $opts{'ninst_ice'};
-my $NTASKS_ICE    = $opts{'ntasks_ice'};
-$cfgdir           = $opts{'cfg_dir'};
+my $CASEROOT        = $opts{'caseroot'};
+my $CASEBUILD       = $opts{'casebuild'};
+my $CIMEROOT        = $opts{'cimeroot'};
+my $inst_string     = $opts{'inst_string'};
+my $ICE_GRID        = $opts{'ice_grid'};
+my $decomp_prefix   = $opts{'decomp_prefix'};
+my $date_stamp      = $opts{'date_stamp'};
+my $ice_ic_mode     = $opts{'ice_ic_mode'};
+my $ice_bgc         = $opts{'ice_bgc'};
+my $surface_mode    = $opts{'surface_mode'};
+my $iceberg_mode    = $opts{'iceberg_mode'};
+my $prognostic_mode = $opts{'prognostic_mode'};
+my $NINST_ICE       = $opts{'ninst_ice'};
+my $NTASKS_ICE      = $opts{'ntasks_ice'};
+$cfgdir             = $opts{'cfg_dir'};
 
 my $CIMEROOT;     
 if ( defined $opts{'cimeroot'} ) {
@@ -180,6 +190,7 @@ print $fh  <<"EOF";
 <?xml version="1.0"?>
 <config_definition>
 <entry id="ice_grid" value="$ICE_GRID">
+<entry id="prognostic_mode" value="$prognostic_mode">
 <entry id="decomp_prefix" value="$decomp_prefix">
 <entry id="date_stamp" value="$date_stamp">
 </config_definition>
@@ -406,6 +417,21 @@ my $START_TOD              = "$xmlvars{'START_TOD'}";
 my $RUN_REFDATE            = "$xmlvars{'RUN_REFDATE'}";
 my $CONTINUE_RUN           = "$xmlvars{'CONTINUE_RUN'}";
 
+my $SSTICE_GRID_FILENAME;
+my $SSTICE_DATA_FILENAME;
+my $SSTICE_YEAR_ALIGN;
+my $SSTICE_YEAR_START;
+my $SSTICE_YEAR_END;
+my $SSTICE_STREAM;
+if ($prognostic_mode eq 'prescribed') {
+    $SSTICE_GRID_FILENAME = $xmlvars{'SSTICE_GRID_FILENAME'};
+    $SSTICE_DATA_FILENAME = $xmlvars{'SSTICE_DATA_FILENAME'};
+    $SSTICE_YEAR_ALIGN    = $xmlvars{'SSTICE_YEAR_ALIGN'};
+    $SSTICE_YEAR_START    = $xmlvars{'SSTICE_YEAR_START'};
+    $SSTICE_YEAR_END      = $xmlvars{'SSTICE_YEAR_END'};
+    $SSTICE_STREAM        = $xmlvars{'SSTICE_STREAM'};
+}
+
 my $output_r = "./${CASE}.mpassi.r";
 my $output_h = "./${CASE}.mpassi.h";
 my $output_d = "./${CASE}.mpassi.d";
@@ -420,8 +446,6 @@ my $RESTART_INPUT_TS_FMT = "$ENV{'RESTART_INPUT_TS_FMT'}";
 my $LID = $ENV{'LID'};
 
 my $ntasks = $NTASKS_ICE / $NINST_ICE; 
-
-if ($CONTINUE_RUN eq 'TRUE') {$RUN_TYPE = "continue";}
 
 print "MPASSI build-namelist: ice_grid is $ICE_GRID \n";
 
@@ -457,6 +481,7 @@ add_default($nl, 'config_pio_stride');
 add_default($nl, 'config_write_output_on_startup');
 add_default($nl, 'config_test_case_diag');
 add_default($nl, 'config_test_case_diag_type');
+add_default($nl, 'config_full_abort_write');
 
 #################################
 # Namelist group: decomposition #
@@ -480,16 +505,17 @@ if ($CONTINUE_RUN eq 'TRUE') {
         add_default($nl, 'config_do_restart_hbrine', 'val'=>".true.");
         add_default($nl, 'config_do_restart_zsalinity', 'val'=>".true.");
         add_default($nl, 'config_do_restart_bgc', 'val'=>".true.");
+        add_default($nl, 'config_do_restart_snow_density', 'val'=>".true.");
+        add_default($nl, 'config_do_restart_snow_grain_radius', 'val'=>".true.");
 } else {
         add_default($nl, 'config_do_restart', 'val'=>".false.");
         add_default($nl, 'config_do_restart_hbrine', 'val'=>".false.");
         add_default($nl, 'config_do_restart_zsalinity', 'val'=>".false.");
         add_default($nl, 'config_do_restart_bgc', 'val'=>".false.");
+        add_default($nl, 'config_do_restart_snow_density', 'val'=>".false.");
+        add_default($nl, 'config_do_restart_snow_grain_radius', 'val'=>".false.");
 }
 add_default($nl, 'config_restart_timestamp_name');
-add_default($nl, 'config_do_restart_hbrine');
-add_default($nl, 'config_do_restart_zsalinity');
-add_default($nl, 'config_do_restart_bgc');
 
 ##############################
 # Namelist group: dimensions #
@@ -503,7 +529,8 @@ add_default($nl, 'config_nSnowLayers');
 # Namelist group: initialize #
 ##############################
 
-if ($ic_mode eq 'spunup') {
+add_default($nl, 'config_earth_radius');
+if ($ice_ic_mode eq 'spunup') {
         add_default($nl, 'config_initial_condition_type', 'val'=>"restart");
 } else {
         add_default($nl, 'config_initial_condition_type');
@@ -522,10 +549,13 @@ add_default($nl, 'config_calculate_coriolis');
 # Namelist group: use_sections #
 ################################
 
+add_default($nl, 'config_use_dynamics');
 add_default($nl, 'config_use_velocity_solver');
 add_default($nl, 'config_use_advection');
 add_default($nl, 'config_use_forcing');
 add_default($nl, 'config_use_column_package');
+add_default($nl, 'config_use_prescribed_ice');
+add_default($nl, 'config_use_prescribed_ice_forcing');
 
 ###########################
 # Namelist group: forcing #
@@ -540,14 +570,16 @@ add_default($nl, 'config_forcing_sst_type');
 add_default($nl, 'config_update_ocean_fluxes');
 add_default($nl, 'config_include_pond_freshwater_feedback');
 
-#############################
-# Namelist group: unit_test #
-#############################
+###########################
+# Namelist group: testing #
+###########################
 
-add_default($nl, 'config_perform_unit_test');
-add_default($nl, 'config_unit_test_type');
-add_default($nl, 'config_unit_test_subtype');
 add_default($nl, 'config_use_test_ice_shelf');
+add_default($nl, 'config_testing_system_test');
+add_default($nl, 'config_use_congelation_basal_melt');
+add_default($nl, 'config_use_lateral_melt');
+add_default($nl, 'config_use_latent_processes');
+add_default($nl, 'config_limit_air_temperatures');
 
 ###################################
 # Namelist group: velocity_solver #
@@ -557,15 +589,22 @@ add_default($nl, 'config_dynamics_subcycle_number');
 add_default($nl, 'config_rotate_cartesian_grid');
 add_default($nl, 'config_include_metric_terms');
 add_default($nl, 'config_elastic_subcycle_number');
+add_default($nl, 'config_strain_scheme');
+add_default($nl, 'config_constitutive_relation_type');
 add_default($nl, 'config_stress_divergence_scheme');
 add_default($nl, 'config_variational_basis');
+add_default($nl, 'config_variational_denominator_type');
 add_default($nl, 'config_wachspress_integration_type');
 add_default($nl, 'config_wachspress_integration_order');
-add_default($nl, 'config_revised_evp');
+add_default($nl, 'config_calc_velocity_masks');
+add_default($nl, 'config_average_variational_strain');
 add_default($nl, 'config_use_air_stress');
 add_default($nl, 'config_use_ocean_stress');
 add_default($nl, 'config_use_surface_tilt');
 add_default($nl, 'config_geostrophic_surface_tilt');
+add_default($nl, 'config_ocean_stress_type');
+add_default($nl, 'config_use_special_boundaries_velocity');
+add_default($nl, 'config_use_special_boundaries_velocity_masks');
 
 #############################
 # Namelist group: advection #
@@ -590,6 +629,7 @@ if ($ice_bgc eq 'ice_bgc') {
 }
 add_default($nl, 'config_use_column_itd_thermodynamics');
 add_default($nl, 'config_use_column_ridging');
+add_default($nl, 'config_use_column_snow_tracers');
 
 ##################################
 # Namelist group: column_tracers #
@@ -602,6 +642,9 @@ add_default($nl, 'config_use_cesm_meltponds');
 add_default($nl, 'config_use_level_meltponds');
 add_default($nl, 'config_use_topo_meltponds');
 add_default($nl, 'config_use_aerosols');
+add_default($nl, 'config_use_effective_snow_density');
+add_default($nl, 'config_use_snow_grain_radius');
+add_default($nl, 'config_use_special_boundaries_tracers');
 
 ###################################
 # Namelist group: biogeochemistry #
@@ -638,6 +681,7 @@ if ($ice_bgc eq 'ice_bgc') {
         add_default($nl, 'config_use_iron', 'val'=>".false.");
 }
 add_default($nl, 'config_use_chlorophyll');
+add_default($nl, 'config_use_macromolecules');
 add_default($nl, 'config_use_modal_aerosols');
 add_default($nl, 'config_use_zaerosols');
 add_default($nl, 'config_skeletal_bgc_flux_type');
@@ -745,6 +789,7 @@ add_default($nl, 'config_mobility_type_DMSPd');
 add_default($nl, 'config_mobility_type_humics');
 add_default($nl, 'config_mobility_type_saccharids');
 add_default($nl, 'config_mobility_type_lipids');
+add_default($nl, 'config_mobility_type_inorganic_carbon');
 add_default($nl, 'config_mobility_type_proteins');
 add_default($nl, 'config_mobility_type_dissolved_iron');
 add_default($nl, 'config_mobility_type_particulate_iron');
@@ -771,6 +816,7 @@ add_default($nl, 'config_ratio_C_to_N_proteins');
 
 add_default($nl, 'config_shortwave_type');
 add_default($nl, 'config_albedo_type');
+add_default($nl, 'config_use_snicar_ad');
 add_default($nl, 'config_visible_ice_albedo');
 add_default($nl, 'config_infrared_ice_albedo');
 add_default($nl, 'config_visible_snow_albedo');
@@ -782,6 +828,19 @@ add_default($nl, 'config_snow_shortwave_tuning_parameter');
 add_default($nl, 'config_temp_change_snow_grain_radius_change');
 add_default($nl, 'config_max_melting_snow_grain_radius');
 add_default($nl, 'config_algae_absorption_coefficient');
+
+########################
+# Namelist group: snow #
+########################
+
+add_default($nl, 'config_snow_redistribution_scheme');
+add_default($nl, 'config_fallen_snow_radius');
+add_default($nl, 'config_use_snow_liquid_ponds');
+add_default($nl, 'config_new_snow_density');
+add_default($nl, 'config_max_snow_density');
+add_default($nl, 'config_minimum_wind_compaction');
+add_default($nl, 'config_wind_compaction_factor');
+add_default($nl, 'config_max_dry_snow_radius');
 
 #############################
 # Namelist group: meltponds #
@@ -842,6 +901,7 @@ add_default($nl, 'config_boundary_layer_iteration_number');
 #########################
 
 add_default($nl, 'config_use_ocean_mixed_layer');
+add_default($nl, 'config_ocean_mixed_layer_type');
 add_default($nl, 'config_min_friction_velocity');
 add_default($nl, 'config_ocean_heat_transfer_type');
 add_default($nl, 'config_sea_freezing_temperature_type');
@@ -851,12 +911,64 @@ if ($surface_mode eq 'non-free') {
         add_default($nl, 'config_ocean_surface_type', 'val'=>"free");
 }
 add_default($nl, 'config_couple_biogeochemistry_fields');
+if ($iceberg_mode eq 'data') {
+        add_default($nl, 'config_use_data_icebergs', 'val'=>"true");
+} else {
+        add_default($nl, 'config_use_data_icebergs', 'val'=>"false");
+}
 
 ###############################
 # Namelist group: diagnostics #
 ###############################
 
 add_default($nl, 'config_check_state');
+
+##################################
+# Namelist group: prescribed_ice #
+##################################
+
+if ($prognostic_mode eq 'prescribed') {
+        if ($SSTICE_GRID_FILENAME eq 'UNSET') {
+                die "SSTICE_GRID_FILENAME must be set for MPAS-Seaice prescribed mode \n";
+        }
+        if ($SSTICE_DATA_FILENAME eq 'UNSET') {
+                die "SSTICE_DATA_FILENAME must be set for MPAS-Seaice prescribed mode \n";
+        }
+        if ($SSTICE_YEAR_ALIGN eq '-999') {
+                die "SSTICE_YEAR_ALIGN must be set for MPAS-Seaice prescribed mode \n";
+        }
+        if ($SSTICE_YEAR_START eq '-999') {
+                die "SSTICE_YEAR_START must be set for MPAS-Seaice prescribed mode \n";
+        }
+        if ($SSTICE_YEAR_END eq '-999') {
+                die "SSTICE_YEAR_END must be set for MPAS-Seaice prescribed mode \n";
+        }
+        my $stream_domxvarname;
+        my $stream_domyvarname;
+        if ($SSTICE_STREAM eq 'CAMDATA') {
+                $stream_domxvarname = "xc";
+                $stream_domyvarname = "yc";
+        } elsif ($SSTICE_STREAM eq 'WRFDATA') {
+                $stream_domxvarname = "xc";
+                $stream_domyvarname = "yc";
+        } else {
+                $stream_domxvarname = "lon";
+                $stream_domyvarname = "lat";
+        }
+        add_default($nl, 'config_prescribed_ice_stream_year_first' , 'val'=>"$SSTICE_YEAR_START");
+        add_default($nl, 'config_prescribed_ice_stream_year_last'  , 'val'=>"$SSTICE_YEAR_END");
+        add_default($nl, 'config_prescribed_ice_model_year_align'  , 'val'=>"$SSTICE_YEAR_ALIGN");
+        add_default($nl, 'config_prescribed_ice_stream_fldvarname' , 'val'=>"ice_cov");
+        add_default($nl, 'config_prescribed_ice_stream_fldfilename', 'val'=>"$SSTICE_DATA_FILENAME");
+        add_default($nl, 'config_prescribed_ice_stream_domtvarname', 'val'=>"time");
+        add_default($nl, 'config_prescribed_ice_stream_domxvarname', 'val'=>"$stream_domxvarname");
+        add_default($nl, 'config_prescribed_ice_stream_domyvarname', 'val'=>"$stream_domyvarname");
+        add_default($nl, 'config_prescribed_ice_stream_domareaname', 'val'=>"area");
+        add_default($nl, 'config_prescribed_ice_stream_dommaskname', 'val'=>"mask");
+        add_default($nl, 'config_prescribed_ice_stream_domfilename', 'val'=>"$SSTICE_GRID_FILENAME");
+        add_default($nl, 'config_prescribed_ice_stream_mapread'    , 'val'=>'NOT_SET');
+        add_default($nl, 'config_prescribed_ice_stream_fill'       , 'val'=>'.false.');
+}
 
 ##########################################
 # Namelist group: AM_highFrequencyOutput #
@@ -909,6 +1021,9 @@ add_default($nl, 'config_AM_conservationCheck_output_stream');
 add_default($nl, 'config_AM_conservationCheck_compute_on_startup');
 add_default($nl, 'config_AM_conservationCheck_write_on_startup');
 add_default($nl, 'config_AM_conservationCheck_write_to_logfile');
+add_default($nl, 'config_AM_conservationCheck_restart_stream');
+add_default($nl, 'config_AM_conservationCheck_carbon_failure_abort');
+add_default($nl, 'config_AM_conservationCheck_include_ocean');
 
 ##########################################
 # Namelist group: AM_geographicalVectors #
@@ -1097,13 +1212,14 @@ my @groups = qw(seaice_model
                 initialize
                 use_sections
                 forcing
-                unit_test
+                testing
                 velocity_solver
                 advection
                 column_package
                 column_tracers
                 biogeochemistry
                 shortwave
+                snow
                 meltponds
                 thermodynamics
                 itd
@@ -1111,6 +1227,7 @@ my @groups = qw(seaice_model
                 atmosphere
                 ocean
                 diagnostics
+                prescribed_ice
                 am_highfrequencyoutput
                 am_temperatures
                 am_regionalstatistics
@@ -1492,34 +1609,31 @@ sub valid_date {
 # $$month by 1 (also incrementing $$year if going from Dec to Jan) and 
 # then return 0.
 
-  use Switch;
-
   my $day = shift;
   my $month = shift;
   my $year = shift;
   my $cal = shift;
 
   my $maxday = -1;
-  switch ($$month) {
-    case 1 { $maxday = 31; }
-    case 2 {
-      if (($cal eq 'NO_LEAP') || (not leap($$year))) {
-        $maxday = 28;
-      } else {
-        $maxday = 29;
-      }
-    }
-    case 3 { $maxday = 31; }
-    case 4 { $maxday = 30; }
-    case 5 { $maxday = 31; }
-    case 6 { $maxday = 30; }
-    case 7 { $maxday = 31; }
-    case 8 { $maxday = 31; }
-    case 9 { $maxday = 30; }
-    case 10 { $maxday = 31; }
-    case 11 { $maxday = 30; }
-    case 12 { $maxday = 31; }
-  }
+  if ($$month == 1) { $maxday = 31; }
+  if ($$month == 2) {
+       if (($cal eq 'NO_LEAP') || (not leap($$year))) {
+         $maxday = 28;
+       } else {
+         $maxday = 29;
+       }
+     }
+  if ($$month == 3) { $maxday = 31; }
+  if ($$month == 4) { $maxday = 30; }
+  if ($$month == 5) { $maxday = 31; }
+  if ($$month == 6) { $maxday = 30; }
+  if ($$month == 7) { $maxday = 31; }
+  if ($$month == 8) { $maxday = 31; }
+  if ($$month == 9) { $maxday = 30; }
+  if ($$month == 10) { $maxday = 31; }
+  if ($$month == 11) { $maxday = 30; }
+  if ($$month == 12) { $maxday = 31; }
+
   if ($maxday == -1) {
     die "ERROR: can not figure out what month $$month is";
   }

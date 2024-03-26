@@ -7,33 +7,59 @@ module rof_comp_mct
 ! in MCT (Model Coupling Toolkit) format and converting it to use by MOSART
 
   use seq_flds_mod
-  use shr_kind_mod     , only : r8 => shr_kind_r8
+  use shr_kind_mod     , only : r8 => shr_kind_r8, SHR_KIND_CL
   use shr_file_mod     , only : shr_file_setLogUnit, shr_file_setLogLevel, &
                                 shr_file_getLogUnit, shr_file_getLogLevel, &
                                 shr_file_getUnit, shr_file_setIO
   use shr_const_mod    , only : SHR_CONST_REARTH
+  use shr_taskmap_mod  , only : shr_taskmap_write
   use seq_cdata_mod    , only : seq_cdata, seq_cdata_setptrs
+  use seq_comm_mct     , only : info_taskmap_comp
   use seq_timemgr_mod  , only : seq_timemgr_EClockGetData, seq_timemgr_StopAlarmIsOn, &
                                 seq_timemgr_RestartAlarmIsOn, seq_timemgr_EClockDateInSync
   use seq_infodata_mod , only : seq_infodata_type, seq_infodata_GetData, seq_infodata_PutData, &
                                 seq_infodata_start_type_start, seq_infodata_start_type_cont,   &
                                 seq_infodata_start_type_brnch
   use seq_comm_mct     , only : seq_comm_suffix, seq_comm_inst, seq_comm_name
-  use RunoffMod        , only : rtmCTL, TRunoff
+  use RunoffMod        , only : rtmCTL, TRunoff, THeat, TUnit, Tctl
   use RtmVar           , only : rtmlon, rtmlat, ice_runoff, iulog, &
                                 nsrStartup, nsrContinue, nsrBranch, & 
-                                inst_index, inst_suffix, inst_name, RtmVarSet
+                                inst_index, inst_suffix, inst_name, RtmVarSet, &
+                                wrmflag, heatflag, data_bgc_fluxes_to_ocean_flag, &
+                                inundflag, use_lnd_rof_two_way, use_ocn_rof_two_way
   use RtmSpmd          , only : masterproc, mpicom_rof, npes, iam, RtmSpmdInit, ROFID
   use RtmMod           , only : Rtmini, Rtmrun
-  use RtmTimeManager   , only : timemgr_setup, get_curr_date, get_step_size, advance_timestep 
+  use RtmTimeManager   , only : timemgr_setup, get_curr_date, get_step_size
   use perf_mod         , only : t_startf, t_stopf, t_barrierf
+
+  use WRM_type_mod     , only : StorWater
+
   use rof_cpl_indices  , only : rof_cpl_indices_set, nt_rtm, rtm_tracers, &
                                 index_x2r_Flrl_rofsur, index_x2r_Flrl_rofi, &
                                 index_x2r_Flrl_rofgwl, index_x2r_Flrl_rofsub, &
-                                index_x2r_Flrl_rofdto, &
+                                index_x2r_Flrl_rofdto, index_x2r_Flrl_demand, &
+                                index_x2r_Flrl_Tqsur, index_x2r_Flrl_Tqsub, &
+                                index_x2r_Sa_tbot, index_x2r_Sa_pbot, &
+                                index_x2r_Sa_u   , index_x2r_Sa_v   , &
+                                index_x2r_Sa_shum, &
+                                index_x2r_So_ssh,  &
+                                index_x2r_Faxa_lwdn , &
+                                index_x2r_Faxa_swvdr, index_x2r_Faxa_swvdf, &
+                                index_x2r_Faxa_swndr, index_x2r_Faxa_swndf, &
                                 index_r2x_Forr_rofl, index_r2x_Forr_rofi, &
                                 index_r2x_Flrr_flood, &
-                                index_r2x_Flrr_volr, index_r2x_Flrr_volrmch
+                                index_r2x_Forr_rofDIN, index_r2x_Forr_rofDIP, &
+                                index_r2x_Forr_rofDON, index_r2x_Forr_rofDOP, &
+                                index_r2x_Forr_rofDOC, index_r2x_Forr_rofPP , &
+                                index_r2x_Forr_rofDSi, index_r2x_Forr_rofPOC, &
+                                index_r2x_Forr_rofPN , index_r2x_Forr_rofDIC, &
+                                index_r2x_Forr_rofFe , &
+                                index_r2x_Flrr_volr, index_r2x_Flrr_volrmch, &
+                                index_x2r_coszen_str, &
+                                index_r2x_Flrr_supply, index_r2x_Flrr_deficit, &
+                                index_r2x_Sr_h2orof, index_r2x_Sr_frac_h2orof, &
+                                index_x2r_Flrl_inundinf
+
   use mct_mod
   use ESMF
 !
@@ -82,6 +108,7 @@ contains
     ! !LOCAL VARIABLES:
     logical :: rof_prognostic                        ! flag
     logical :: flood_present                         ! flag
+    logical :: rofocn_prognostic                     ! ocn rof two way coupling flag
     integer :: mpicom_loc                            ! mpi communicator
     type(mct_gsMap),         pointer :: gsMap_rof    ! runoff model MCT GS map
     type(mct_gGrid),         pointer :: dom_r        ! runoff model domain
@@ -89,6 +116,7 @@ contains
     integer :: lsize                                 ! size of attribute vector
     integer :: g,i,j,n                               ! indices
     logical :: exists                                ! true if file exists
+    logical :: verbose_taskmap_output                ! true then use verbose task-to-node mapping format
     integer :: nsrest                                ! restart type
     integer :: ref_ymd                               ! reference date (YYYYMMDD)
     integer :: ref_tod                               ! reference time of day (sec)
@@ -107,6 +135,8 @@ contains
     character(len=SHR_KIND_CL) :: hostname           ! hostname of machine running on
     character(len=SHR_KIND_CL) :: version            ! Model version
     character(len=SHR_KIND_CL) :: username           ! user running the model
+    character(len=8)           :: c_inst_index       ! instance number
+    character(len=8)           :: c_npes             ! number of pes
     character(len=32), parameter :: sub = 'rof_init_mct'
     character(len=*),  parameter :: format = "('("//trim(sub)//") :',A)"
     !---------------------------------------------------------------------------
@@ -155,6 +185,36 @@ contains
        write(iulog,*) ' inst_name = ',trim(inst_name)
     endif
 
+    ! Identify SMP nodes and process/SMP mapping for this instance.
+    ! (Assume that processor names are SMP node names on SMP clusters.)
+    write(c_inst_index,'(i8)') inst_index
+
+    if (info_taskmap_comp > 0) then
+
+       if (info_taskmap_comp == 1) then
+          verbose_taskmap_output = .false.
+       else
+          verbose_taskmap_output = .true.
+       endif
+
+       write(c_npes,'(i8)') npes
+
+       if (masterproc) then
+          write(iulog,'(/,3A)') &
+             trim(adjustl(c_npes)), &
+             ' pes participating in computation of MOSART instance #', &
+             trim(adjustl(c_inst_index))
+          call shr_sys_flush(iulog)
+       endif
+
+       call t_startf("shr_taskmap_write")
+       call shr_taskmap_write(iulog, mpicom_rof,                    &
+                              'ROF #'//trim(adjustl(c_inst_index)), &
+                              verbose=verbose_taskmap_output        )
+       call t_stopf("shr_taskmap_write")
+
+    endif
+
     ! Initialize mosart
     call seq_timemgr_EClockGetData(EClock,                               &
                                    start_ymd=start_ymd,                  &
@@ -189,6 +249,9 @@ contains
                    nsrest_in=nsrest, version_in=version,           &
                    hostname_in=hostname, username_in=username)
 
+    use_lnd_rof_two_way = lnd_rof_two_way
+    use_ocn_rof_two_way = ocn_rof_two_way
+
     ! Read namelist, grid and surface data
     call Rtmini(rtm_active=rof_prognostic,flood_active=flood_present)
 
@@ -204,11 +267,11 @@ contains
        lsize = mct_gsMap_lsize(gsMap_rof, mpicom_rof)
        call rof_domain_mct( lsize, gsMap_rof, dom_r )
        
-       ! Initialize lnd -> mosart attribute vector		
+       ! Initialize lnd -> mosart attribute vector
        call mct_aVect_init(x2r_r, rList=seq_flds_x2r_fields, lsize=lsize)
        call mct_aVect_zero(x2r_r)
-       
-       ! Initialize mosart -> ocn attribute vector		
+
+       ! Initialize mosart -> ocn attribute vector        
        call mct_aVect_init(r2x_r, rList=seq_flds_r2x_fields, lsize=lsize)
        call mct_aVect_zero(r2x_r) 
        
@@ -220,7 +283,7 @@ contains
 
     ! Fill in infodata
     call seq_infodata_PutData( infodata, rof_present=rof_prognostic, rof_nx = rtmlon, rof_ny = rtmlat, &
-         rof_prognostic=rof_prognostic)
+         rof_prognostic=rof_prognostic, rofocn_prognostic=use_ocn_rof_two_way)
     call seq_infodata_PutData( infodata, flood_present=flood_present)
 
     ! Reset shr logging to original values
@@ -299,7 +362,6 @@ contains
     write(rdate,'(i4.4,"-",i2.2,"-",i2.2,"-",i5.5)') yr_sync,mon_sync,day_sync,tod_sync
     nlend = seq_timemgr_StopAlarmIsOn( EClock )
     rstwr = seq_timemgr_RestartAlarmIsOn( EClock )
-    call advance_timestep()
     call Rtmrun(rstwr,nlend,rdate)
 
     ! Map roff data to MCT datatype (input is rtmCTL%runoff, output is r2x_r)
@@ -514,6 +576,8 @@ contains
     !
     ! LOCAL VARIABLES
     integer :: n2, n, nt, begr, endr, nliq, nfrz
+    real(R8) :: tmp1, tmp2
+    real(R8) :: shum
     character(len=32), parameter :: sub = 'rof_import_mct'
     !---------------------------------------------------------------------------
     
@@ -547,11 +611,43 @@ contains
        else
           rtmCTL%qdto(n,nliq) = 0.0_r8
        endif
-
+       if (wrmflag) then
+          rtmCTL%qdem(n,nliq) = x2r_r%rAttr(index_x2r_Flrl_demand,n2) / TUnit%domainfrac(n) * (rtmCTL%area(n)*0.001_r8)
+       else
+          rtmCTL%qdem(n,nliq) = 0.0_r8
+       endif
        rtmCTL%qsur(n,nfrz) = x2r_r%rAttr(index_x2r_Flrl_rofi,n2) * (rtmCTL%area(n)*0.001_r8)
        rtmCTL%qsub(n,nfrz) = 0.0_r8
        rtmCTL%qgwl(n,nfrz) = 0.0_r8
        rtmCTL%qdto(n,nfrz) = 0.0_r8
+       rtmCTL%qdem(n,nfrz) = 0.0_r8
+
+       if (index_x2r_So_ssh>0) then
+          rtmCTL%ssh(n)       = x2r_r%rAttr(index_x2r_So_ssh,n2)
+       end if
+
+       if(heatflag) then
+          rtmCTL%Tqsur(n) = x2r_r%rAttr(index_x2r_Flrl_Tqsur,n2)
+          rtmCTL%Tqsub(n) = x2r_r%rAttr(index_x2r_Flrl_Tqsub,n2)
+          THeat%Tqsur(n) = rtmCTL%Tqsur(n)
+          THeat%Tqsub(n) = rtmCTL%Tqsub(n)
+       
+          THeat%forc_t(n) = x2r_r%rAttr(index_x2r_Sa_tbot,n2)
+          THeat%forc_pbot(n) = x2r_r%rAttr(index_x2r_Sa_pbot,n2)
+          tmp1 = x2r_r%rAttr(index_x2r_Sa_u   ,n2)
+          tmp2 = x2r_r%rAttr(index_x2r_Sa_v   ,n2)
+          THeat%forc_wind(n) = sqrt(tmp1*tmp1 + tmp2*tmp2)
+          THeat%forc_lwrad(n)= x2r_r%rAttr(index_x2r_Faxa_lwdn ,n2)
+          THeat%forc_solar(n)= x2r_r%rAttr(index_x2r_Faxa_swvdr,n2) + x2r_r%rAttr(index_x2r_Faxa_swvdf,n2) + &
+                               x2r_r%rAttr(index_x2r_Faxa_swndr,n2) + x2r_r%rAttr(index_x2r_Faxa_swndf,n2)
+          shum = x2r_r%rAttr(index_x2r_Sa_shum,n2)
+          THeat%forc_vp(n)   = shum * THeat%forc_pbot(n)  / (0.622_r8 + 0.378_r8 * shum)
+          THeat%coszen(n)    = x2r_r%rAttr(index_x2r_coszen_str,n2)
+       end if
+
+       if (index_x2r_Flrl_inundinf > 0) then
+          rtmCTL%inundinf(n) = x2r_r%rAttr(index_x2r_Flrl_inundinf,n2) * (rtmCTL%area(n)*0.001_r8)
+       endif
 
     enddo
 
@@ -574,6 +670,7 @@ contains
     integer :: ni, n, nt, nliq, nfrz
     logical,save :: first_time = .true.
     character(len=32), parameter :: sub = 'rof_export_mct'
+    real(R8) :: tmp1
     !---------------------------------------------------------------------------
     
     nliq = 0
@@ -621,6 +718,22 @@ contains
                 write(iulog,*) sub, ' : ERROR runoff count',n,ni
                 call shr_sys_abort( sub//' : ERROR runoff > expected' )
              endif
+! note runoff has already been divided by area so do not need to do it again for nutrient flux
+             if (data_bgc_fluxes_to_ocean_flag) then
+               tmp1 = r2x_r%rAttr(index_r2x_Forr_rofl,ni)
+               r2x_r%rAttr(index_r2x_Forr_rofDIN,ni) =  tmp1*rtmCTL%concDIN(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDIP,ni) =  tmp1*rtmCTL%concDIP(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDON,ni) =  tmp1*rtmCTL%concDON(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDOP,ni) =  tmp1*rtmCTL%concDOP(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDOC,ni) =  tmp1*rtmCTL%concDOC(n)
+               r2x_r%rAttr(index_r2x_Forr_rofPP ,ni) =  tmp1*rtmCTL%concPP(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDSi,ni) =  tmp1*rtmCTL%concDSi(n)
+               r2x_r%rAttr(index_r2x_Forr_rofPOC,ni) =  tmp1*rtmCTL%concPOC(n)
+               r2x_r%rAttr(index_r2x_Forr_rofPN ,ni) =  tmp1*rtmCTL%concPN(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDIC,ni) =  tmp1*rtmCTL%concDIC(n)
+               r2x_r%rAttr(index_r2x_Forr_rofFe,ni)  =  tmp1*rtmCTL%concFe(n)
+             end if
+
           endif
        end do
     else
@@ -636,6 +749,21 @@ contains
                 write(iulog,*) sub, ' : ERROR runoff count',n,ni
                 call shr_sys_abort( sub//' : ERROR runoff > expected' )
              endif
+! note runoff has already been divided by area so do not need to do it again for nutrient flux
+             if (data_bgc_fluxes_to_ocean_flag) then
+               tmp1 = r2x_r%rAttr(index_r2x_Forr_rofl,ni)
+               r2x_r%rAttr(index_r2x_Forr_rofDIN,ni) =  tmp1*rtmCTL%concDIN(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDIP,ni) =  tmp1*rtmCTL%concDIP(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDON,ni) =  tmp1*rtmCTL%concDON(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDOP,ni) =  tmp1*rtmCTL%concDOP(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDOC,ni) =  tmp1*rtmCTL%concDOC(n)
+               r2x_r%rAttr(index_r2x_Forr_rofPP ,ni) =  tmp1*rtmCTL%concPP(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDSi,ni) =  tmp1*rtmCTL%concDSi(n)
+               r2x_r%rAttr(index_r2x_Forr_rofPOC,ni) =  tmp1*rtmCTL%concPOC(n)
+               r2x_r%rAttr(index_r2x_Forr_rofPN ,ni) =  tmp1*rtmCTL%concPN(n)
+               r2x_r%rAttr(index_r2x_Forr_rofDIC,ni) =  tmp1*rtmCTL%concDIC(n)
+               r2x_r%rAttr(index_r2x_Forr_rofFe,ni)  =  tmp1*rtmCTL%concFe(n)
+             end if
           endif
        end do
     end if
@@ -648,7 +776,22 @@ contains
        r2x_r%rattr(index_r2x_Flrr_flood,ni)   = -rtmCTL%flood(n) / (rtmCTL%area(n)*0.001_r8)
        r2x_r%rattr(index_r2x_Flrr_volr,ni)    = (Trunoff%wr(n,nliq) + Trunoff%wt(n,nliq)) / rtmCTL%area(n)
        r2x_r%rattr(index_r2x_Flrr_volrmch,ni) = Trunoff%wr(n,nliq) / rtmCTL%area(n)
+       r2x_r%rattr(index_r2x_Flrr_supply,ni)  = 0._r8
+       r2x_r%rattr(index_r2x_Flrr_deficit,ni)  = 0._r8
+       if (wrmflag) then
+          r2x_r%rattr(index_r2x_Flrr_supply,ni)  = StorWater%Supply(n) / (rtmCTL%area(n)*0.001_r8)   !converted to mm/s
+          r2x_r%rattr(index_r2x_Flrr_deficit,ni)  = (abs(rtmCTL%qdem(n,nliq)) - abs(StorWater%Supply(n))) / (rtmCTL%area(n)*0.001_r8)   !send deficit back to ELM
+       endif
     end do
+
+    if ( index_r2x_Sr_h2orof > 0 ) then
+      ni = 0
+      do n = rtmCTL%begr, rtmCTL%endr
+        ni = ni + 1
+        r2x_r%rattr(index_r2x_Sr_h2orof,ni)      = rtmCTL%inundwf(n) / (rtmCTL%area(n)*0.001_r8) ! m^3 to mm
+        r2x_r%rattr(index_r2x_Sr_frac_h2orof,ni) = rtmCTL%inundff(n)
+      enddo
+    endif
 
   end subroutine rof_export_mct
 

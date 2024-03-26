@@ -1,3 +1,4 @@
+! 06/2018: O. Guba  code for new ftypes
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -25,7 +26,7 @@ module prim_advance_mod
   private
   save
   public :: prim_advance_exp, prim_advance_init1, &
-       applyCAMforcing_dynamics, applyCAMforcing, vertical_mesh_init2
+            applyCAMforcing_dynamics
 
   real (kind=real_kind), allocatable :: ur_weights(:)
 
@@ -58,19 +59,6 @@ contains
 
     end subroutine prim_advance_init1
 
-  !_____________________________________________________________________
-  subroutine vertical_mesh_init2(elem, nets, nete, hybrid, hvcoord)
-
-    ! additional solver specific initializations (called from prim_init2)
-
-    type (element_t),			intent(inout), target :: elem(:)! array of element_t structures
-    integer,				intent(in) :: nets,nete		! start and end element indices
-    type (hybrid_t),			intent(in) :: hybrid		! mpi/omp data struct
-    type (hvcoord_t),			intent(inout)	:: hvcoord	! hybrid vertical coord data struct
-
-  end subroutine vertical_mesh_init2
-
-    
 #ifndef CAM
   !_____________________________________________________________________
   subroutine set_prescribed_wind(elem,deriv,hybrid,hv,dt,tl,nets,nete,eta_ave_w)
@@ -125,7 +113,7 @@ contains
 
     enddo
   end subroutine
-#endif
+#endif     
 
   !_____________________________________________________________________
   subroutine prim_advance_exp(elem, deriv, hvcoord, hybrid,dt, tl,  nets, nete, compute_diagnostics)
@@ -557,127 +545,20 @@ contains
 
     call t_stopf('prim_advance_exp')
 !pw call t_adj_detailf(-1)
-    end subroutine prim_advance_exp
+  end subroutine prim_advance_exp
 
 
-
-
-  subroutine applyCAMforcing(elem,hvcoord,np1,np1_qdp,dt,nets,nete)
-
-  use physical_constants, only: Cp
-
-  implicit none
-  type (element_t),       intent(inout) :: elem(:)
-  real (kind=real_kind),  intent(in)    :: dt
-  type (hvcoord_t),       intent(in)    :: hvcoord
-  integer,                intent(in)    :: np1,nets,nete,np1_qdp
-
-  ! local
-  integer :: i,j,k,ie,q
-  real (kind=real_kind) :: v1,dp
-  real (kind=real_kind) :: beta(np,np),E0(np,np),ED(np,np),dp0m1(np,np),dpsum(np,np)
-
-  do ie=nets,nete
-     ! apply forcing to Qdp
-     elem(ie)%derived%FQps(:,:)=0
-#if (defined COLUMN_OPENMP)
-!$omp parallel do private(q,k,i,j,v1)
-#endif
-     do q=1,qsize
-        do k=1,nlev
-           do j=1,np
-              do i=1,np
-                 v1 = dt*elem(ie)%derived%FQ(i,j,k,q)
-                 !if (elem(ie)%state%Qdp(i,j,k,q,np1) + v1 < 0 .and. v1<0) then
-                 if (elem(ie)%state%Qdp(i,j,k,q,np1_qdp) + v1 < 0 .and. v1<0) then
-                    !if (elem(ie)%state%Qdp(i,j,k,q,np1) < 0 ) then
-                    if (elem(ie)%state%Qdp(i,j,k,q,np1_qdp) < 0 ) then
-                       v1=0  ! Q already negative, dont make it more so
-                    else
-                       !v1 = -elem(ie)%state%Qdp(i,j,k,q,np1)
-                       v1 = -elem(ie)%state%Qdp(i,j,k,q,np1_qdp)
-                    endif
-                 endif
-                 !elem(ie)%state%Qdp(i,j,k,q,np1) = elem(ie)%state%Qdp(i,j,k,q,np1)+v1
-                 elem(ie)%state%Qdp(i,j,k,q,np1_qdp) = elem(ie)%state%Qdp(i,j,k,q,np1_qdp)+v1
-                 if (q==1) then
-                    elem(ie)%derived%FQps(i,j)=elem(ie)%derived%FQps(i,j)+v1/dt
-                 endif
-              enddo
-           enddo
-        enddo
-     enddo
-
-     if (use_moisture) then
-        ! to conserve dry mass in the precese of Q1 forcing:
-        elem(ie)%state%ps_v(:,:,np1) = elem(ie)%state%ps_v(:,:,np1) + &
-             dt*elem(ie)%derived%FQps(:,:)
-     endif
-
-#if 0
-     ! disabled - energy fixers will be moving into CAM physics
-     ! energy fixer for FQps term
-     ! dp1 = dp0 + d(FQps)
-     ! dp0-dp1 = -d(FQps)
-     ! E0-E1 = sum( dp0*ED) - sum( dp1*ED) = sum( dp0-dp1) * ED )
-     ! compute E0-E1
-     E0=0
-     do k=1,nlev
-        ED(:,:) = ( 0.5d0* &
-             (elem(ie)%state%v(:,:,1,k,np1)**2 + elem(ie)%state%v(:,:,2,k,np1)**2)&
-             + cp*elem(ie)%state%T(:,:,k,np1)  &
-             + elem(ie)%state%phis(:,:) )
-
-        dp0m1(:,:) = -dt*( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%derived%FQps(:,:)
-
-        E0(:,:) = E0(:,:) + dp0m1(:,:)*ED(:,:)
-     enddo
-     ! energy fixer:
-     ! Tnew = T + beta
-     ! cp*dp*beta  = E0-E1   beta = (E0-E1)/(cp*sum(dp))
-
-     dpsum(:,:) = ( hvcoord%hyai(nlev+1) - hvcoord%hyai(1) )*hvcoord%ps0 + &
-          ( hvcoord%hybi(nlev+1) - hvcoord%hybi(1) )*elem(ie)%state%ps_v(:,:,np1)
-
-     beta(:,:)=E0(:,:)/(dpsum(:,:)*cp)
-     do k=1,nlev
-        elem(ie)%state%T(:,:,k,np1)=elem(ie)%state%T(:,:,k,np1)+beta(:,:)
-     enddo
-#endif
-
-     ! Qdp(np1) and ps_v(np1) were updated by forcing - update Q(np1)
-#if (defined COLUMN_OPENMP)
-!$omp parallel do private(q,k,i,j,dp)
-#endif
-     do q=1,qsize
-        do k=1,nlev
-           do j=1,np
-              do i=1,np
-                 dp = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
-                      ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(i,j,np1)
-                 elem(ie)%state%Q(i,j,k,q) = elem(ie)%state%Qdp(i,j,k,q,np1_qdp)/dp
-              enddo
-           enddo
-        enddo
-     enddo
-
-     elem(ie)%state%T(:,:,:,np1)   = elem(ie)%state%T(:,:,:,np1)   + dt*elem(ie)%derived%FT(:,:,:)
-     elem(ie)%state%v(:,:,:,:,np1) = elem(ie)%state%v(:,:,:,:,np1) + dt*elem(ie)%derived%FM(:,:,:,:)
-
-  enddo
-  end subroutine applyCAMforcing
-
-
-
-  subroutine applyCAMforcing_dynamics(elem,hvcoord,np1,np1_q,dt,nets,nete)
-
+  subroutine applyCAMforcing_dynamics(elem,hvcoord,np1,dt,nets,nete)
+  !
+  ! applies dynamic tendencies without dp adjustment
+  !
   use hybvcoord_mod,  only: hvcoord_t
 
   implicit none
   type (element_t)     ,  intent(inout) :: elem(:)
   real (kind=real_kind),  intent(in)    :: dt
   type (hvcoord_t),       intent(in)    :: hvcoord
-  integer,                intent(in)    :: np1,nets,nete,np1_q
+  integer,                intent(in)    :: np1,nets,nete
 
   integer :: i,j,k,ie,q
   real (kind=real_kind) :: v1,dp
@@ -700,7 +581,7 @@ contains
   !  For correct scaling, dt2 should be the same 'dt2' used in the leapfrog advace
   !
   !
-  use control_mod, only : nu, nu_div, nu_s, hypervis_order, hypervis_subcycle, nu_p, nu_top, psurf_vis, swest
+  use control_mod, only : nu, nu_div, nu_s, hypervis_order, hypervis_subcycle, nu_p, nu_top, swest
   use hybvcoord_mod, only : hvcoord_t
   use derivative_mod, only : derivative_t, laplace_sphere_wk, vlaplace_sphere_wk
   use edgetype_mod, only : EdgeBuffer_t, EdgeDescriptor_t
@@ -721,7 +602,7 @@ contains
   real (kind=real_kind) :: eta_ave_w  ! weighting for mean flux terms
   real (kind=real_kind) :: nu_scale_top
   integer :: k,kptr,i,j,ie,ic,nt
-  real (kind=real_kind), dimension(np,np)      :: dpdn
+  !real (kind=real_kind), dimension(np,np)      :: dpdn
   real (kind=real_kind), dimension(np,np,2,nlev,nets:nete)      :: vtens
   real (kind=real_kind), dimension(np,np,nlev,nets:nete)        :: ttens
   real (kind=real_kind), dimension(np,np,nlev,nets:nete)        :: dptens
@@ -875,9 +756,7 @@ contains
                  ! normalize so as to conserve IE
                  ! scale by 1/rho (normalized to be O(1))
                  ! dp/dn = O(ps0)*O(delta_eta) = O(ps0)/O(nlev)
-                 dpdn(:,:) = ( hvcoord%hyai(k+1) - hvcoord%hyai(k) )*hvcoord%ps0 + &
-                      ( hvcoord%hybi(k+1) - hvcoord%hybi(k) )*elem(ie)%state%ps_v(:,:,nt)
-                 ttens(:,:,k,ie) = ttens(:,:,k,ie) * hvcoord%dp0(k)/dpdn(:,:)
+                 ttens(:,:,k,ie) = ttens(:,:,k,ie) * hvcoord%dp0(k)/elem(ie)%state%dp3d(:,:,k,nt)
                  dptens(:,:,k,ie) = 0
               endif
               
@@ -1067,19 +946,14 @@ contains
   real (kind=real_kind) ::  glnps1,glnps2,gpterm
   integer :: i,j,k,kptr,ie
 
-!JMD  call t_barrierf('sync_compute_and_apply_rhs', hybrid%par%comm)
-
-!pw call t_adj_detailf(+1)
   call t_startf('compute_and_apply_rhs')
   do ie=nets,nete
-     !ps => elem(ie)%state%ps_v(:,:,n0)
-     !phi => elem(ie)%derived%phi(:,:,:)
      dp  => elem(ie)%state%dp3d(:,:,:,n0)
 
 ! dont thread this because of k-1 dependence:
      p(:,:,1)=hvcoord%hyai(1)*hvcoord%ps0 + dp(:,:,1)/2
      do k=2,nlev
-        p(:,:,k)=p(:,:,k-1) + dp(:,:,k-1)/2 + dp(:,:,k)/2
+        p(:,:,k)=p(:,:,k-1) + (dp(:,:,k-1) + dp(:,:,k))/2
      enddo
 
 #if (defined COLUMN_OPENMP)
@@ -1276,13 +1150,13 @@ contains
 
               vtens1(i,j,k) =   - v_vadv(i,j,1,k)                           &
                    + v2*(elem(ie)%fcor(i,j) + vort(i,j,k))        &
-                   - vtemp(i,j,1) - glnps1
+                   - (vtemp(i,j,1) + glnps1)
               !
               ! phl: add forcing term to zonal wind u
               !
               vtens2(i,j,k) =   - v_vadv(i,j,2,k)                            &
                    - v1*(elem(ie)%fcor(i,j) + vort(i,j,k))        &
-                   - vtemp(i,j,2) - glnps2
+                   - (vtemp(i,j,2) + glnps2)
               !
               ! phl: add forcing term to meridional wind v
               !

@@ -2,29 +2,24 @@ my @groups = qw(run_modes
                 time_management
                 io
                 decomposition
-                init_setup
-                cvtgenerator
-                init_ssh_and_landicepressure
                 time_integration
-                ale_vertical_grid
-                ale_frequency_filtered_thickness
-                partial_bottom_cells
                 hmix
                 hmix_del2
                 hmix_del4
                 hmix_leith
-                mesoscale_eddy_parameterization
-                hmix_del2_tensor
-                hmix_del4_tensor
+                redi_isopycnal_mixing
+                submesoscale_eddy_parameterization
+                gm_eddy_parameterization
+                eddy_parameterization
                 rayleigh_damping
-                vmix
-                vmix_const
-                vmix_rich
-                vmix_tanh
                 cvmix
+                wave_coupling
+                gotm
                 forcing
                 coupling
                 shortwaveradiation
+                self_attraction_loading
+                tidal_potential_forcing
                 frazil_ice
                 land_ice_fluxes
                 advection
@@ -33,15 +28,23 @@ my @groups = qw(run_modes
                 pressure_gradient
                 eos
                 eos_linear
+                eos_wright
+                split_timestep_share
                 split_explicit_ts
-                testing
+                split_implicit_ts
+                ale_vertical_grid
+                ale_frequency_filtered_thickness
                 debug
-                constrain_haney_number
+                testing
+                transport_tests
+                init_mode_vert_levels
                 tracer_forcing_activetracers
                 tracer_forcing_debugtracers
                 tracer_forcing_ecosystracers
                 tracer_forcing_dmstracers
                 tracer_forcing_macromoleculestracers
+                tracer_forcing_idealagetracers
+                tracer_forcing_cfctracers
                 am_globalstats
                 am_surfaceareaweightedaverages
                 am_watermasscensus
@@ -62,6 +65,8 @@ my @groups = qw(run_modes
                 am_timeseriesstatsdaily
                 am_timeseriesstatsmonthly
                 am_timeseriesstatsclimatology
+                am_timeseriesstatsmonthlymax
+                am_timeseriesstatsmonthlymin
                 am_timeseriesstatscustom
                 am_pointwisestats
                 am_debugdiagnostics
@@ -69,4 +74,10 @@ my @groups = qw(run_modes
                 am_transecttransport
                 am_eddyproductvariables
                 am_mocstreamfunction
+                am_oceanheatcontent
+                am_mixedlayerheatbudget
+                am_sedimentfluxindex
+                am_sedimenttransport
+                am_harmonicanalysis
+                am_conservationcheck
                 );

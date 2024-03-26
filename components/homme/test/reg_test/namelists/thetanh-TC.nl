@@ -14,9 +14,11 @@
   runtype           = 0                         ! 0 => new run
   tstep             = 450                      ! largest timestep in seconds
   integration       = 'explicit'                ! explicit time integration
-  tstep_type        = 7
-  rsplit            = 1
+  tstep_type        = 9
+  rsplit            = 2
   qsplit            = 2
+  vert_remap_q_alg  = 10
+  vert_remap_u_alg  = 11
   nu                = 3e16                      ! default= 1e15*(ne30/ne8)**3.2 = 6.9e16
   nu_s              = 3e16
   nu_p              = 3e16  
@@ -30,7 +32,6 @@
   dcmip16_pbl_type  = 0                         ! 0=basic pbl,   1= bryan pbl
 /
 &vert_nl
-  vform         = "ccm"
   vfile_mid     = "./vcoord/camm-30.ascii"
   vfile_int     = "./vcoord/cami-30.ascii"
 /

@@ -29,6 +29,8 @@
       use ice_blocks
       use ice_domain_size
       use ice_constants
+      use ice_state, only: aice, vice
+
 !
 !EOP
 !
@@ -123,7 +125,10 @@
          swvdf   , & ! sw down, visible, diffuse (W/m^2)
          swidr   , & ! sw down, near IR, direct  (W/m^2)
          swidf   , & ! sw down, near IR, diffuse (W/m^2)
-         flw         ! incoming longwave radiation (W/m^2)
+         flw     , & ! incoming longwave radiation (W/m^2)
+         wsresp  , & ! response of atmospheric boundary layer to wind (m/s/Pa)
+         tau_est , & ! estimated stress at equilibrium with wind (Pa)
+         ugust       ! gustiness from atmosphere (m/s)
 
        ! in from atmosphere (if .not. Tsfc_calc)
        ! required for coupling to HadGEM3
@@ -388,6 +393,9 @@
       rhoa  (:,:,:) = 1.3_dbl_kind    ! air density (kg/m^3)
       uatm  (:,:,:) = c5              ! wind velocity    (m/s)
       vatm  (:,:,:) = c5
+      wsresp(:,:,:) = c0              ! response of wind to stress (m/s/Pa)
+      tau_est(:,:,:)= c0              ! stress in equilibrium with wind (Pa)
+      ugust (:,:,:) = c0              ! gustiness from atmosphere (m/s)
       strax (:,:,:) = 0.05_dbl_kind
       stray (:,:,:) = 0.05_dbl_kind
       if (l_winter) then
@@ -661,7 +669,6 @@
 !
 !EOP
 !
-      use ice_state, only: aice, vice
 
       fsurf  (:,:,:) = c0
       fcondtop(:,:,:)= c0
@@ -940,7 +947,9 @@
       ! Merge fluxes
       !-----------------------------------------------------------------
 
+#ifdef CPRCRAY
 !DIR$ CONCURRENT !Cray
+#endif
 !cdir nodep      !NEC
 !ocl novrec      !Fujitsu
       do ij = 1, icells
@@ -1092,7 +1101,9 @@
           i, j    ! horizontal indices
 
 
+#ifdef CPRCRAY
 !DIR$ CONCURRENT !Cray
+#endif
 !cdir nodep      !NEC
 !ocl novrec      !Fujitsu
       do j = 1, ny_block

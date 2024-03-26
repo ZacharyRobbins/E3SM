@@ -37,11 +37,11 @@ wght_fm       = 0.10D0
 kcut_fm       = 2
 /
 &vert_nl
-vform         = "ccm"
 vfile_mid     = "/home/mataylo/homme/test/vcoord/sabm-20.ascii"
 vfile_int     = "/home/mataylo/homme/test/vcoord/sabi-20.ascii"
 /
 &analysis_nl
+infilenames=''
 output_timeunits=1,
 output_frequency=1,
 output_start_time=200

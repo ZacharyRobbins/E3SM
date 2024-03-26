@@ -30,7 +30,6 @@
   omega             = 0.0                       ! earth angular speed = 0.0
 /
 &vert_nl
-  vform             = "ccm"                     ! vertical coordinate type "ccm"=hybrid pressure/terrain
   vanalytic         = 1                         ! set vcoords in initialization routine
   vtop              = 2.73919e-1                ! vertical coordinate at top of atm (z=10000m)
 /
@@ -44,6 +43,7 @@
   num_io_procs      = 16         
   interp_nlat       = 128
   interp_nlon       = 256
+  interp_gridtype   = 2                         ! gauss grid
 /
 &prof_inparm
   profile_outpe_num   = 100

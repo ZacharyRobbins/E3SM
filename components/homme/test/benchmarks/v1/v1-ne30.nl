@@ -8,7 +8,6 @@ rotate_grid = 0
 ne=30
 ndays=1
 qsize = 40
-nmax         = 360
 statefreq=360
 disable_diagnostics = .true.
 restartfreq   = 43200
@@ -35,7 +34,6 @@ hypervis_order = 2
 hypervis_subcycle=3    ! ne30: 3  ne120: 4
 /
 &vert_nl
-vform         = "ccm"
 vfile_mid = './acme-72m.ascii'
 vfile_int = './acme-72i.ascii'
 /

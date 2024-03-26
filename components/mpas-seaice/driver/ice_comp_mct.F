@@ -16,12 +16,14 @@ module ice_comp_mct
    use seq_cdata_mod
    use seq_infodata_mod
    use seq_timemgr_mod
-   use seq_comm_mct,      only : seq_comm_suffix, seq_comm_inst, seq_comm_name
-   use shr_file_mod 
+   use seq_comm_mct,      only : seq_comm_suffix, seq_comm_inst, seq_comm_name, info_taskmap_comp
+   use shr_file_mod
    use shr_cal_mod,       only : shr_cal_date2ymd
    use shr_sys_mod
+   use shr_taskmap_mod,   only : shr_taskmap_write
    use shr_pio_mod
    use perf_mod
+   use shr_strdata_mod,   only : shr_strdata_type
 
    ! MPASSI driver modules
    use mpassi_cpl_indices
@@ -53,9 +55,11 @@ module ice_comp_mct
    use seaice_initialize, only: seaice_init_post_clock_advance
    use seaice_mesh, only: seaice_latlon_vector_rotation_backward
    use seaice_time_integration
+   use seaice_error, only: seaice_check_critical_error
 
-   use ice_constants_colpkg, only: &
-       Tffresh
+   use ice_constants_colpkg, only: Tffresh, ice_ref_salinity, p001
+
+   use ice_colpkg, only: colpkg_sea_freezing_temperature
 
 !
 ! !PUBLIC MEMBER FUNCTIONS:
@@ -87,8 +91,8 @@ module ice_comp_mct
 
    character(len=StrKIND) :: runtype, coupleTimeStamp
 
-   type(seq_infodata_type), pointer :: infodata   
-   type (iosystem_desc_t), pointer :: io_system 
+   type(seq_infodata_type), pointer :: infodata
+   type (iosystem_desc_t), pointer :: io_system
 
    integer :: iceLogUnit ! unit number for ice log
 
@@ -96,6 +100,10 @@ module ice_comp_mct
    type (core_type), pointer :: corelist => null()
    type (domain_type), pointer :: domain
    integer :: itimestep, ice_cpl_dt
+
+   ! prescribed ice mode
+   type(shr_strdata_type) :: &
+        sdat ! prescribed data stream
 
 !=======================================================================
 
@@ -145,12 +153,13 @@ contains
     character(len=StrKIND) :: cpl_seq_option
 
     type (MPAS_Time_Type) :: currTime
-    integer :: iam, ierr, ierr_local
+    integer :: iam, npes, ierr, ierr_local
     integer :: iyear0, imonth0
     character(len=StrKIND)  :: starttype          ! infodata start type
     character(len=StrKIND)  :: timeStamp
     character(len=StrKIND)  :: nml_filename
     character(len=16) :: inst_suffix
+    integer :: inst_index
     integer :: lbnum
 
     type (MPAS_Time_Type) :: alarmStartTime
@@ -160,6 +169,7 @@ contains
     type (MPAS_Pool_Type), pointer :: shortwave
 
     logical :: exists
+    logical :: verbose_taskmap_output                ! true then use verbose task-to-node mapping format
 
     character(kind=c_char), dimension(StrKIND+1) :: c_filename       ! StrKIND+1 for C null-termination character
     integer(kind=c_int) :: c_comm
@@ -175,6 +185,8 @@ contains
     character(kind=c_char), dimension(StrKIND+1) :: c_ref_time_temp
     character(kind=c_char), dimension(StrKIND+1) :: c_filename_interval_temp
     character(kind=c_char), dimension(StrKIND+1) :: c_iotype
+    character(len=8) :: c_inst_index ! instance number
+    character(len=8) :: c_npes       ! number of pes
     type (MPAS_Time_type) :: start_time
     type (MPAS_Time_type) :: ref_time
     type (MPAS_TimeInterval_type) :: filename_interval
@@ -184,6 +196,14 @@ contains
     character(len=StrKIND) :: iotype
     logical :: streamsExists
     integer :: mesh_iotype
+    character(len=strKIND) :: caseid
+    character(len=strKIND) :: model_version
+    character(len=strKIND) :: username
+    character(len=strKIND) :: hostname
+    character(len=strKIND) :: institution
+    character(len=strKIND) :: curdate
+    character(len=strKIND) :: curtime
+    character(len=strKIND) :: history
 
     logical, pointer :: tempLogicalConfig
     character(len=StrKIND), pointer :: tempCharConfig
@@ -236,7 +256,7 @@ contains
 !   set cdata pointers
 !
 !-----------------------------------------------------------------------
-    errorCode = 0 
+    errorCode = 0
 
     call seq_cdata_setptrs(cdata_i, ID=ICEID, mpicom=mpicom_i, &
          gsMap=gsMap_i, dom=dom_i, infodata=infodata)
@@ -249,7 +269,7 @@ contains
 #if (defined _MEMTRACE)
     if(iam == 0) then
         lbnum=1
-        call memmon_dump_fort('memmon.out','ice_init_mct:start::',lbnum) 
+        call memmon_dump_fort('memmon.out','ice_init_mct:start::',lbnum)
     endif
 #endif
 
@@ -296,6 +316,38 @@ contains
 
     call mpas_framework_init_phase1(domain % dminfo, mpicom_i)
 
+    ! Identify SMP nodes and process/SMP mapping for this instance
+    ! (Assume that processor names are SMP node names on SMP clusters.)
+    inst_index = seq_comm_inst(iceID)
+    write(c_inst_index,'(i8)') inst_index
+
+    if (info_taskmap_comp > 0) then
+
+       if (info_taskmap_comp == 1) then
+          verbose_taskmap_output = .false.
+       else
+          verbose_taskmap_output = .true.
+       endif
+
+       call MPI_comm_size(mpicom_i,npes,ierr)
+       write(c_npes,'(i8)') npes
+
+       if (iam==0) then
+          write(iceLogUnit,'(/,3A)') &
+             trim(adjustl(c_npes)), &
+             ' pes participating in computation of MPAS-SEAICE instance #', &
+             trim(adjustl(c_inst_index))
+          call shr_sys_flush(iceLogUnit)
+       endif
+
+       call t_startf("shr_taskmap_write")
+       call shr_taskmap_write(iceLogUnit, mpicom_i,                 &
+                              'ICE #'//trim(adjustl(c_inst_index)), &
+                              verbose=verbose_taskmap_output        )
+       call t_stopf("shr_taskmap_write")
+
+    endif
+
     ! Setup function pointers for MPASSI core and domain types
     call seaice_setup_core(corelist)
     call seaice_setup_domain(domain)
@@ -309,7 +361,7 @@ contains
     end if
 
     ! Set core specific options here
-    ! Disable output from all but the master task for ACME!
+    ! Disable output from all but the master task for E3SM!
     ! (This overrides the default set by mpas_log_init based on MPAS_DEBUG setting.)
     if (iam /= 0) then
        domain % logInfo % outputLog % isActive = .false.
@@ -328,8 +380,8 @@ contains
     ! Process namelist and streams files
     ! ----------
     ! Override the names of the stream and namelist files
-    domain % namelist_filename = 'mpassi_in'
-    domain % streams_filename = 'streams.seaice'
+    domain % namelist_filename = 'mpassi_in' // trim(inst_suffix)
+    domain % streams_filename = 'streams.seaice' // trim(inst_suffix)
 
     ! Setup namelist variables, and read the namelist
     ierr = domain % core % setup_namelist(domain % configs, domain % namelist_filename, domain % dminfo)
@@ -387,9 +439,22 @@ contains
 
     else if (runtype == "continue" .or. runtype == "branch") then ! Restart run or branch run
 
-        ! Turn on restart
+        ! Turn on restarts
         call mpas_pool_get_config(domain % configs, "config_do_restart", tempLogicalConfig)
         tempLogicalConfig = .true.
+        call mpas_pool_get_config(domain % configs, "config_do_restart_bgc", tempLogicalConfig)
+        tempLogicalConfig = .true.
+        call mpas_pool_get_config(domain % configs, "config_do_restart_hbrine", tempLogicalConfig)
+        tempLogicalConfig = .true.
+        call mpas_pool_get_config(domain % configs, "config_do_restart_snow_density", tempLogicalConfig)
+        tempLogicalConfig = .true.
+        call mpas_pool_get_config(domain % configs, "config_do_restart_snow_grain_radius", tempLogicalConfig)
+        tempLogicalConfig = .true.
+        call mpas_pool_get_config(domain % configs, "config_do_restart_zsalinity", tempLogicalConfig)
+        tempLogicalConfig = .true.
+        call mpas_pool_get_config(domain % configs, "config_do_restart_bgc", tempLogicalConfig)
+        tempLogicalConfig = .true.
+
 
         ! Set start time to be read from file
         call mpas_pool_get_config(domain % configs, "config_start_time", tempCharConfig)
@@ -473,7 +538,41 @@ contains
     call MPAS_stream_mgr_init(domain % streamManager, domain % ioContext, domain % clock, domain % blocklist % allFields, &
                               domain % packages, domain % blocklist % allStructs)
 
+    ! add E3SM stream attributes to MPAS output files
+    call seq_infodata_GetData(infodata, case_name=caseid, model_version=model_version, username=username, hostname=hostname)
+    institution = &
+         'LLNL (Lawrence Livermore National Laboratory, Livermore, CA 94550, USA); &
+         &ANL (Argonne National Laboratory, Argonne, IL 60439, USA); &
+         &BNL (Brookhaven National Laboratory, Upton, NY 11973, USA); &
+         &LANL (Los Alamos National Laboratory, Los Alamos, NM 87545, USA); &
+         &LBNL (Lawrence Berkeley National Laboratory, Berkeley, CA 94720, USA); &
+         &ORNL (Oak Ridge National Laboratory, Oak Ridge, TN 37831, USA); &
+         &PNNL (Pacific Northwest National Laboratory, Richland, WA 99352, USA); &
+         &SNL (Sandia National Laboratories, Albuquerque, NM 87185, USA). &
+         &Mailing address: LLNL Climate Program, c/o David C. Bader, &
+         &Principal Investigator, L-103, 7000 East Avenue, Livermore, CA 94550, USA'
+    call datetime(curdate, curtime)
+    history = 'created on ' // trim(curdate) // ' ' // trim(curtime)
+
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'case', trim(caseid))
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'source_id', trim(model_version))
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'realm', 'seaIce')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'product', 'model-output')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'title', 'MPAS-Seaice History file information')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'source', 'E3SM Sea Ice Model')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'institution',trim(institution))
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'institution_id', 'E3SM-Project')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'contact', 'e3sm-data-support@listserv.llnl.gov')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'username', trim(username))
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'hostname', trim(hostname))
+
+    ! Other attributes
     call add_stream_attributes(domain)
+
+    ! overwrite MPAS attributes
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'history', trim(history))
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'Conventions', 'CF-1.7')
+    call MPAS_stream_mgr_add_att(domain % streamManager, 'git_version', trim(model_version))
 
     ! Setup all immutable streams for the core
     ierr = domain % core % setup_immutable_streams(domain % streamManager)
@@ -569,15 +668,15 @@ contains
 
     ! Initialize mct ice domain (needs ice initialization info)
     call ice_domain_mct( lsize, gsMap_i, dom_i )
-    
+
     ! Inialize mct attribute vectors
-    
+
     call mct_aVect_init(x2i_i, rList=seq_flds_x2i_fields, lsize=lsize)
     call mct_aVect_zero(x2i_i)
-    
-    call mct_aVect_init(i2x_i, rList=seq_flds_i2x_fields, lsize=lsize) 
+
+    call mct_aVect_init(i2x_i, rList=seq_flds_i2x_fields, lsize=lsize)
     call mct_aVect_zero(i2x_i)
-    
+
     nsend = mct_avect_nRattr(i2x_i)
     nrecv = mct_avect_nRattr(x2i_i)
 
@@ -646,7 +745,7 @@ contains
 !
 !-----------------------------------------------------------------------
 
-    call ice_export_mct(i2x_i, errorCode)  
+    call ice_export_mct(i2x_i, errorCode)
     if (errorCode /= 0) then
        call mpas_log_write('Error in ice_export_mct', MPAS_LOG_CRIT)
     endif
@@ -661,7 +760,7 @@ contains
 !
 !-----------------------------------------------------------------------
 
-    call ice_import_mct(x2i_i, errorCode)  
+    call ice_import_mct(x2i_i, errorCode)
     if (errorCode /= 0) then
        call mpas_log_write('Error in ice_import_mct', MPAS_LOG_CRIT)
     endif
@@ -672,11 +771,19 @@ contains
 
     itimestep = 0
 
-    call seaice_analysis_compute_startup(domain, ierr) 
+    call seaice_analysis_compute_startup(domain, ierr)
 
     ! Reset all output alarms, to prevent intial time step from writing any output, unless it's ringing.
     call mpas_stream_mgr_reset_alarms(domain % streamManager, direction=MPAS_STREAM_OUTPUT, ierr=ierr)
     call mpas_stream_mgr_reset_alarms(domain % streamManager, direction=MPAS_STREAM_INPUT, ierr=ierr)
+
+!----------------------------------------------------------------------------
+!
+!   Initialize ice prescribed mode
+!
+!----------------------------------------------------------------------------
+
+    call ice_prescribed_init( domain, ICEID, gsmap_i, dom_i )
 
 !----------------------------------------------------------------------------
 !
@@ -690,7 +797,7 @@ contains
 #if defined (_MEMTRACE)
     if(iam  == 0) then
         lbnum=1
-        call memmon_dump_fort('memmon.out','ice_init_mct:end::',lbnum) 
+        call memmon_dump_fort('memmon.out','ice_init_mct:end::',lbnum)
         call memmon_reset_addr()
     endif
 #endif
@@ -700,6 +807,198 @@ contains
 !EOC
 
  end subroutine ice_init_mct!}}}
+
+!***********************************************************************
+!BOP
+!
+! !IROUTINE: ice_prescribed_init
+!
+! !INTERFACE:
+  subroutine ice_prescribed_init( domain, compid, gsmap, dom )!{{{
+!
+! !DESCRIPTION:
+! Initialize prescribed ice
+!
+! !USES:
+    use shr_pio_mod, only: &
+         shr_pio_getiotype, &
+         shr_pio_getiosys
+    use seq_comm_mct, only: &
+         seq_comm_name
+    use shr_cal_mod, only: &
+         shr_cal_noleap, &
+         shr_cal_gregorian
+    use shr_strdata_mod, only: &
+         shr_strdata_create
+    use shr_kind_mod, only: &
+         SHR_KIND_IN
+    include 'mpif.h'
+! !INPUT/OUTPUT PARAMETERS:
+    type (domain_type), pointer :: &
+         domain
+    integer, intent(in) :: &
+         compid
+    type(mct_gsMap) :: &
+         gsmap
+    type(mct_gGrid) :: &
+         dom
+!
+! !REVISION HISTORY:
+! Author: Adrian K. Turner
+!EOP
+!-----------------------------------------------------------------------
+!
+!  local variables
+!
+!-----------------------------------------------------------------------
+
+    integer(SHR_KIND_IN), parameter :: nFilesMaximum = 400 ! max number of files
+
+    integer, pointer :: stream_year_first   ! first year in stream to use
+    integer, pointer :: stream_year_last    ! last year in stream to use
+    integer, pointer :: model_year_align    ! align stream_year_first
+                                   ! with this model year
+    character(len=strKIND), pointer :: stream_fldVarName
+    character(len=strKIND), pointer :: stream_fldFileNameIn
+    character(len=strKIND) :: stream_fldFileName(nFilesMaximum)
+    character(len=strKIND), pointer :: stream_domTvarName
+    character(len=strKIND), pointer :: stream_domXvarName
+    character(len=strKIND), pointer :: stream_domYvarName
+    character(len=strKIND), pointer :: stream_domAreaName
+    character(len=strKIND), pointer :: stream_domMaskName
+    character(len=strKIND), pointer :: stream_domFileName
+    character(len=strKIND), pointer :: stream_mapread
+    logical, pointer :: stream_fill ! true if data fill required
+
+    integer :: &
+         ierr, &
+         iFile, &
+         nFiles
+
+    character(len=8) :: &
+         fillalgo
+
+    character(len=16) :: &
+         inst_name
+
+    integer, pointer :: &
+         nCellsSolve
+
+    Integer :: &
+         nCells
+
+    character(len=strKIND), pointer :: &
+         config_calendar_type
+
+    character(len=strKIND) :: &
+         calendar_type
+
+    logical, pointer :: &
+         config_use_prescribed_ice
+
+    call MPAS_pool_get_config(domain % configs, "config_use_prescribed_ice", config_use_prescribed_ice)
+    if (config_use_prescribed_ice) then
+
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_year_first", stream_year_first)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_year_last", stream_year_last)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_model_year_align", model_year_align)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_fldvarname", stream_fldVarName)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_fldfilename", stream_fldFileNameIn)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_domtvarname", stream_domTvarName)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_domxvarname", stream_domXvarName)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_domyvarname", stream_domYvarName)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_domareaname", stream_domAreaName)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_dommaskname", stream_domMaskName)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_domfilename", stream_domFileName)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_mapread", stream_mapread)
+       call mpas_pool_get_config(domain % configs, "config_prescribed_ice_stream_fill", stream_fill)
+
+       ! file array
+       stream_fldFileName(1) = trim(stream_fldFileNameIn)
+       do iFile = 2, nFilesMaximum
+          stream_fldFileName(iFile) = ' '
+       end do
+
+       ! file number
+       nFiles = 0
+       do iFile = 1, nFilesMaximum
+          if (stream_fldFileName(iFile) /= ' ') nFiles = nFiles + 1
+       end do
+
+       ! Read shr_strdata_nml namelist
+       if (stream_fill) then
+          fillalgo='nn'
+       else
+          fillalgo='none'
+       endif
+
+       call MPAS_log_write(' ')
+       call MPAS_log_write('This is the prescribed ice coverage option.')
+       call MPAS_log_write('  stream_year_first  = $i', intArgs=(/stream_year_first/))
+       call MPAS_log_write('  stream_year_last   = $i', intArgs=(/stream_year_last/))
+       call MPAS_log_write('  model_year_align   = $i', intArgs=(/model_year_align/))
+       call MPAS_log_write('  stream_fldVarName  = '//trim(stream_fldVarName))
+       do iFile = 1, nFiles
+          call MPAS_log_write('  stream_fldFileName = $i: '//trim(stream_fldFileName(iFile)), intArgs=(/iFile/))
+       end do
+       call MPAS_log_write('  stream_domTvarName = '//trim(stream_domTvarName))
+       call MPAS_log_write('  stream_domXvarName = '//trim(stream_domXvarName))
+       call MPAS_log_write('  stream_domYvarName = '//trim(stream_domYvarName))
+       call MPAS_log_write('  stream_domFileName = '//trim(stream_domFileName))
+       call MPAS_log_write('  stream_domAreaName = '//trim(stream_domAreaName))
+       call MPAS_log_write('  stream_domMaskName = '//trim(stream_domMaskName))
+       call MPAS_log_write('  stream_mapread     = '//trim(stream_mapread))
+       call MPAS_log_write('  stream_fillalgo    = '//trim(fillalgo))
+       call MPAS_log_write(' ')
+
+       inst_name = seq_comm_name(compid)
+
+       call MPAS_pool_get_dimension(domain % blocklist % dimensions, "nCellsSolve", nCellsSolve)
+       call MPI_Allreduce(nCellsSolve, nCells, 1, MPI_Integer, MPI_SUM, domain % dminfo % comm, ierr)
+
+
+       call MPAS_pool_get_config(domain % configs, "config_calendar_type", config_calendar_type)
+       if (trim(config_calendar_type) == "gregorian") then
+          calendar_type = shr_cal_gregorian
+       else if (trim(config_calendar_type) == "noleap") then
+          calendar_type = shr_cal_noleap
+       else
+          call MPAS_log_write("ice_prescribed_init: Unknown calendar type: "//trim(config_calendar_type))
+       endif
+
+       call shr_strdata_create( &
+            sdat, &
+            name = "prescribed_ice", &
+            mpicom = domain % dminfo % comm, &
+            compid = compid, &
+            gsmap = gsmap, &
+            ggrid = dom, &
+            nxg = nCells, &
+            nyg = 1, &
+            yearFirst = stream_year_first, &
+            yearLast = stream_year_last, &
+            yearAlign = model_year_align, &
+            offset = 0, &
+            domFilePath = '', &
+            domFileName = trim(stream_domFileName), &
+            domTvarName = trim(stream_domTvarName), &
+            domXvarName = trim(stream_domXvarName), &
+            domYvarName = trim(stream_domYvarName), &
+            domAreaName = trim(stream_domAreaName), &
+            domMaskName = trim(stream_domMaskName), &
+            filePath = '', &
+            filename = stream_fldFileName(1:nFiles), &
+            fldListFile = trim(stream_fldVarName), &
+            fldListModel = trim(stream_fldVarName), &
+            pio_subsystem = shr_pio_getiosys(inst_name), &
+            pio_iotype = shr_pio_getiotype(inst_name), &
+            fillalgo = trim(fillalgo), &
+            calendar = trim(calendar_type), &
+            mapread = trim(stream_mapread))
+
+    endif ! config_use_prescribed_ice
+
+  end subroutine ice_prescribed_init
 
 !***********************************************************************
 !BOP
@@ -727,7 +1026,7 @@ contains
 !!  local variables
 !!
 !!-----------------------------------------------------------------------
-! Variables related to ACME coupler
+! Variables related to E3SM coupler
       integer :: ymd, tod, ihour, iminute, isecond
       integer :: iyear, imonth, iday, curr_ymd, curr_tod
       integer :: shrloglev, shrlogunit
@@ -755,7 +1054,7 @@ contains
 #ifdef MPAS_DEBUG
       debugOn = .true.
 #endif
- 
+
       ! Set MPAS Log module instance
       mpas_log_info => domain % logInfo
       if (debugOn) call mpas_log_write("=== Beginning ice_run_mct ===")
@@ -809,10 +1108,15 @@ contains
         itimestep = itimestep + 1
         call mpas_advance_clock(domain % clock)
 
-        ! final initialization after clock advance 
+        ! final initialization after clock advance
         if (first) then
+           call seaice_forcing_get(domain % streamManager, domain, domain % clock, .true.)
+
            call seaice_init_post_clock_advance(domain, domain % clock)
            first = .false.
+        else
+           ! forcing
+           call seaice_forcing_get(domain % streamManager, domain, domain % clock, .false.)
         endif
 
         currTime = mpas_get_clock_time(domain % clock, MPAS_NOW, ierr)
@@ -822,6 +1126,9 @@ contains
         write (WCstring,'(F18.3)') current_wallclock_time
         call mpas_log_write(trim(timeStamp) // '  WC time:' // WCstring)
 
+        ! get prescribed ice coverage
+        call ice_prescribed_run(domain, currTime)
+
         ! pre-timestep analysis computation
         if (debugOn) call mpas_log_write('   Starting analysis precompute', masterOnly=.true.)
         call seaice_analysis_precompute(domain, ierr)
@@ -829,7 +1136,8 @@ contains
 
         if (debugOn) call mpas_log_write('   Starting forward update', masterOnly=.true.)
         call mpas_timer_start("time integration", .false.)
-        call seaice_timestep(domain, domain % clock, itimestep, ierr)
+        ierr = 0
+        call seaice_timestep(domain, domain % clock, itimestep)
         call mpas_timer_stop("time integration")
         if (debugOn) call mpas_log_write('   Finished forward update', masterOnly=.true.)
 
@@ -869,6 +1177,7 @@ contains
       if (seq_timemgr_RestartAlarmIsOn(EClock)) then
          ! Write a restart file, because the coupler asked for it.
          if (debugOn) call mpas_log_write('Writing restart streams', masterOnly=.true.)
+         call seaice_forcing_write_restart_times(domain)
          call mpas_stream_mgr_begin_iteration(domain % streamManager)
          do while ( mpas_stream_mgr_get_next_stream(domain % streamManager, streamID=streamName, &
                     directionProperty=streamDirection, activeProperty=streamActive) )
@@ -917,6 +1226,108 @@ contains
 !EOC
 
   end subroutine ice_run_mct!}}}
+
+
+!***********************************************************************
+!BOP
+!
+! !IROUTINE: ice_prescribed_run
+!
+! !INTERFACE:
+  subroutine ice_prescribed_run( domain, currTime )!{{{
+!
+! !DESCRIPTION:
+! Set ice coverage for prescribed ice mode
+!
+! !USES:
+    use shr_strdata_mod, only: &
+         shr_strdata_advance
+! !INPUT/OUTPUT PARAMETERS:
+    type (domain_type), pointer :: &
+         domain
+    type (MPAS_Time_Type), intent(in) :: &
+         currTime
+!
+! !REVISION HISTORY:
+! Author: Adrian K. Turner
+!EOP
+!-----------------------------------------------------------------------
+!
+!  local variables
+!
+!-----------------------------------------------------------------------
+
+    logical, pointer :: &
+         config_use_prescribed_ice
+
+    integer :: &
+         mDateIn, &
+         secIn, &
+         YYYY, MM, DD, DoY, H, M, S, &
+         ierr
+
+    integer :: &
+         n, &
+         iCell
+
+    type (block_type), pointer :: &
+         block_ptr
+
+    type (mpas_pool_type), pointer :: &
+         meshPool, &
+         prescribedIcePool
+
+    integer, pointer :: &
+         nCellsSolve
+
+    real(kind=RKIND), dimension(:), pointer :: &
+         iceCoverage
+
+    type (field1DReal), pointer :: &
+         iceCoverageField
+
+    call MPAS_pool_get_config(domain % configs, "config_use_prescribed_ice", config_use_prescribed_ice)
+    if (config_use_prescribed_ice) then
+
+       call MPAS_get_time(currTime, YYYY, MM, DD, DoY, H, M, S, ierr)
+       mDateIn = YYYY * 10000 + MM * 100 + DD
+       secIn = H * 3600 + M * 60 + S
+
+       call shr_strdata_advance(&
+            sdat, &
+            mDateIn, &
+            SecIn, &
+            domain % dminfo % comm, &
+            'mpassi_pice')
+
+       n = 0
+       block_ptr => domain % blocklist
+       do while(associated(block_ptr))
+
+          call MPAS_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
+          call MPAS_pool_get_subpool(block_ptr % structs, 'prescribed_ice', prescribedIcePool)
+
+          call MPAS_pool_get_dimension(meshPool, 'nCellsSolve', nCellsSolve)
+
+          call MPAS_pool_get_array(prescribedIcePool, 'iceCoverage', iceCoverage)
+
+          iceCoverage(:) = 0.0_RKIND
+
+          do iCell = 1, nCellsSolve
+             n = n + 1
+             iceCoverage(iCell) = sdat % avs(1) % rAttr(1,n)
+          enddo ! iCell
+
+          block_ptr => block_ptr % next
+       end do
+
+       call MPAS_pool_get_subpool(domain % blocklist % structs, 'prescribed_ice', prescribedIcePool)
+       call MPAS_pool_get_field(prescribedIcePool, 'iceCoverage', iceCoverageField)
+       call MPAS_dmpar_exch_halo_field(iceCoverageField)
+
+    endif
+
+  end subroutine ice_prescribed_run
 
 !***********************************************************************
 !BOP
@@ -1020,7 +1431,7 @@ contains
 
     integer :: i, n, lsize, gsize, ier
 
-    type (block_type), pointer :: block_ptr 
+    type (block_type), pointer :: block_ptr
     type (mpas_pool_type), pointer :: meshPool
 
     integer, dimension(:), pointer :: indexToCellID
@@ -1088,7 +1499,7 @@ contains
 
     integer        , intent(in)    :: lsize
     type(mct_gsMap), intent(in)    :: gsMap_i
-    type(mct_ggrid), intent(inout) :: dom_i     
+    type(mct_ggrid), intent(inout) :: dom_i
 
 !EOP
 !BOC
@@ -1139,19 +1550,19 @@ contains
 
 !-------------------------------------------------------------------
 !
-! Determine domain 
+! Determine domain
 ! Initialize attribute vector with special value
 !
 !-------------------------------------------------------------------
 
-    data(:) = -9999.0_R8 
-    call mct_gGrid_importRAttr(dom_i,"lat"  ,data,lsize) 
-    call mct_gGrid_importRAttr(dom_i,"lon"  ,data,lsize) 
-    call mct_gGrid_importRAttr(dom_i,"area" ,data,lsize) 
-    call mct_gGrid_importRAttr(dom_i,"aream",data,lsize) 
-    data(:) = 1.0_R8     
-    call mct_gGrid_importRAttr(dom_i,"mask",data,lsize) 
-    call mct_gGrid_importRAttr(dom_i,"frac",data,lsize) 
+    data(:) = -9999.0_R8
+    call mct_gGrid_importRAttr(dom_i,"lat"  ,data,lsize)
+    call mct_gGrid_importRAttr(dom_i,"lon"  ,data,lsize)
+    call mct_gGrid_importRAttr(dom_i,"area" ,data,lsize)
+    call mct_gGrid_importRAttr(dom_i,"aream",data,lsize)
+    data(:) = 1.0_R8
+    call mct_gGrid_importRAttr(dom_i,"mask",data,lsize)
+    call mct_gGrid_importRAttr(dom_i,"frac",data,lsize)
 
 !-------------------------------------------------------------------
 !
@@ -1172,10 +1583,10 @@ contains
           n = n + 1
           data(n) = lonCell(i) * r2d
        end do
-       
+
        block_ptr => block_ptr % next
     end do
-    call mct_gGrid_importRattr(dom_i,"lon",data,lsize) 
+    call mct_gGrid_importRattr(dom_i,"lon",data,lsize)
 
     n = 0
     block_ptr => domain % blocklist
@@ -1192,7 +1603,7 @@ contains
        end do
        block_ptr => block_ptr % next
     end do
-    call mct_gGrid_importRattr(dom_i,"lat",data,lsize) 
+    call mct_gGrid_importRattr(dom_i,"lat",data,lsize)
 
     n = 0
     block_ptr => domain % blocklist
@@ -1210,7 +1621,7 @@ contains
        end do
        block_ptr => block_ptr % next
     end do
-    call mct_gGrid_importRattr(dom_i,"area",data,lsize) 
+    call mct_gGrid_importRattr(dom_i,"area",data,lsize)
 
     ! Build mask and frac based on landIceMask
     block_ptr => domain % blocklist
@@ -1239,8 +1650,8 @@ contains
        block_ptr => block_ptr % next
     end do
 
-    call mct_gGrid_importRattr(dom_i,"mask",data,lsize) 
-    call mct_gGrid_importRattr(dom_i,"frac",data,lsize) 
+    call mct_gGrid_importRattr(dom_i,"mask",data,lsize)
+    call mct_gGrid_importRattr(dom_i,"frac",data,lsize)
 
     deallocate(data)
     deallocate(idata)
@@ -1263,7 +1674,7 @@ contains
 !  This routine receives message from cpl7 driver
 !
 !    The following fields are always received from the coupler:
-! 
+!
 !    o  t        -- ocn layer temperature
 !    o  s        -- ocn salinity
 !    o  u        -- ocn u velocity
@@ -1279,21 +1690,21 @@ contains
 !    o  dhdx     -- ocn surface slope, zonal
 !    o  dhdy     -- ocn surface slope, meridional
 !    o  lwdn     -- downward lw heat flux
-!    o  rain     -- prec: liquid 
-!    o  snow     -- prec: frozen 
+!    o  rain     -- prec: liquid
+!    o  snow     -- prec: frozen
 !    o  swndr    -- sw: nir direct  downward
 !    o  swvdr    -- sw: vis direct  downward
 !    o  swndf    -- sw: nir diffuse downward
 !    o  swvdf    -- sw: vis diffuse downward
 !    o  swnet    -- sw: net
-!    o  meltp    -- ocn melt heat  
-!    o  frazil   -- ocn frazil production
+!    o  q        -- ocn frazil heat flux(+) / melt potential(-)
+!    o  frazil   -- ocn frazil mass flux
 !    o  bcphidry -- Black Carbon hydrophilic dry deposition flux
 !    o  bcphodry -- Black Carbon hydrophobic dry deposition flux
 !    o  bcphiwet -- Black Carbon hydrophilic wet deposition flux
 !    o  ocphidry -- Organic Carbon hydrophilic dry deposition flux
 !    o  ocphodry -- Organic Carbon hydrophobic dry deposition flux
-!    o  ocphiwet -- Organic Carbon hydrophilic dry deposition flux
+!    o  ocphiwet -- Organic Carbon hydrophilic wet deposition flux
 !    o  dstwet1  -- Size 1 dust -- wet deposition flux
 !    o  dstwet2  -- Size 2 dust -- wet deposition flux
 !    o  dstwet3  -- Size 3 dust -- wet deposition flux
@@ -1302,10 +1713,10 @@ contains
 !    o  dstdry2  -- Size 2 dust -- dry deposition flux
 !    o  dstdry3  -- Size 3 dust -- dry deposition flux
 !    o  dstdry4  -- Size 4 dust -- dry deposition flux
-! 
+!
 !    The following fields are sometimes received from the coupler,
 !      depending on model options:
-! 
+!
 !    o  algae1   --
 !    o  algae2   --
 !    o  algae3   --
@@ -1330,7 +1741,7 @@ contains
 !    o  zaer4    --
 !    o  zaer5    --
 !    o  zaer6    --
-! 
+!
 !-----------------------------------------------------------------------
 !
 ! !REVISION HISTORY:
@@ -1356,14 +1767,13 @@ contains
    character (len=StrKIND) :: &
       label,                  &
       message
- 
+
    integer ::  &
       i,n
 
    real (kind=RKIND) :: &
-      frazilProduction, &
-      meltingPotential, &
-      freezingPotential
+      frazilMassFlux, &
+      frazilMassFluxRev
 
    type (block_type), pointer :: block_ptr
 
@@ -1392,6 +1802,7 @@ contains
       seaSurfaceSalinityField,          &
       seaFreezingTemperatureField,      &
       freezingMeltingPotentialField,    &
+      frazilMassAdjustField,            &
       uOceanVelocityField,              &
       vOceanVelocityField,              &
       seaSurfaceTiltUField,             &
@@ -1434,6 +1845,7 @@ contains
       seaSurfaceSalinity,          &
       seaFreezingTemperature,      &
       freezingMeltingPotential,    &
+      frazilMassAdjust,            &
       uOceanVelocity,              &
       vOceanVelocity,              &
       seaSurfaceTiltU,             &
@@ -1459,7 +1871,8 @@ contains
       oceanDMSPConc,               &
       oceanHumicsConc,             &
       carbonToNitrogenRatioAlgae,  &
-      carbonToNitrogenRatioDON
+      carbonToNitrogenRatioDON,    &
+      DOCPoolFractions
 
    real (kind=RKIND), dimension(:,:), pointer :: &
       oceanAlgaeConc,              &
@@ -1473,9 +1886,9 @@ contains
       atmosBlackCarbonFlux,        &
       atmosDustFlux
 
-!----------------------------------------------------------------------- 
+!-----------------------------------------------------------------------
 !
-!  zero out padded cells 
+!  zero out padded cells
 !
 !-----------------------------------------------------------------------
 
@@ -1507,6 +1920,7 @@ contains
       call mpas_pool_get_array(oceanCoupling, 'seaSurfaceSalinity', seaSurfaceSalinity)
       call mpas_pool_get_array(oceanCoupling, 'seaFreezingTemperature', seaFreezingTemperature)
       call mpas_pool_get_array(oceanCoupling, 'freezingMeltingPotential', freezingMeltingPotential)
+      call mpas_pool_get_array(oceanCoupling, 'frazilMassAdjust', frazilMassAdjust)
       call mpas_pool_get_array(oceanCoupling, 'uOceanVelocity', uOceanVelocity)
       call mpas_pool_get_array(oceanCoupling, 'vOceanVelocity', vOceanVelocity)
       call mpas_pool_get_array(oceanCoupling, 'seaSurfaceTiltU', seaSurfaceTiltU)
@@ -1552,6 +1966,8 @@ contains
          call mpas_pool_get_array(biogeochemistry, 'oceanZAerosolConc', oceanZAerosolConc)
          call mpas_pool_get_array(biogeochemistry, 'carbonToNitrogenRatioAlgae', carbonToNitrogenRatioAlgae)
          call mpas_pool_get_array(biogeochemistry, 'carbonToNitrogenRatioDON', carbonToNitrogenRatioDON)
+         call mpas_pool_get_array(biogeochemistry, 'DOCPoolFractions', DOCPoolFractions)
+
          if (config_use_zaerosols) then
             call mpas_pool_get_array(biogeochemistry, "atmosBlackCarbonFlux", atmosBlackCarbonFlux)
             call mpas_pool_get_array(biogeochemistry, "atmosDustFlux", atmosDustFlux)
@@ -1562,20 +1978,35 @@ contains
         n = n + 1
         seaSurfaceTemperature(i)       = x2i_i % rAttr(index_x2i_So_t, n)
         seaSurfaceSalinity(i)          = x2i_i % rAttr(index_x2i_So_s, n)
+
+        seaFreezingTemperature(i) = colpkg_sea_freezing_temperature(seaSurfaceSalinity(i))
+
         uOceanVelocity(i)              = x2i_i % rAttr(index_x2i_So_u, n)
         vOceanVelocity(i)              = x2i_i % rAttr(index_x2i_So_v, n)
         seaSurfaceTiltU(i)             = x2i_i % rAttr(index_x2i_So_dhdx, n)
         seaSurfaceTiltV(i)             = x2i_i % rAttr(index_x2i_So_dhdy, n)
 
         if (trim(config_ocean_surface_type) == "free") then ! free surface (MPAS-O)
-        
-           meltingPotential            = x2i_i % rAttr(index_x2i_Fioo_meltp, n)
 
-           ! frazil calculation
-           frazilProduction            = x2i_i % rAttr(index_x2i_Fioo_frazil, n)
-           call freezing_potential(freezingPotential, frazilProduction, seaSurfaceSalinity(i), &
+           ! freezingMeltingPotential(i) is the ocean energy associated with frazil formation
+           ! when it is positive and frazilMassFlux is positive. Conversely, freezingMeltingPotential(i)
+           ! is negative when there is the melting potential in which case frazilMassFlux is zero.
+
+           freezingMeltingPotential(i) = x2i_i % rAttr(index_x2i_Fioo_q, n)
+
+           frazilMassFlux              = x2i_i % rAttr(index_x2i_Fioo_frazil, n)
+
+           ! Now determine the sea ice mass associated with the frazil heat flux given when
+           ! freezingMeltingPotential(i) is positive. This produces a revised mass flux, given
+           ! in frazilMassFluxRev for the given sea surface salinity. The resulting difference
+           ! is assigned to frazilMassAdjust(i) which is exported to the ocean in the subsequent
+           ! coupling step as a freshwater and salt flux. This step is required to balance mass
+           ! and heat with the ocean.
+
+           call frazil_mass(freezingMeltingPotential(i), frazilMassFluxRev, seaSurfaceSalinity(i), &
                                    config_thermodynamics_type)
-           freezingMeltingPotential(i) = freezingPotential + meltingPotential
+
+           frazilMassAdjust(i) = frazilMassFlux-frazilMassFluxRev
 
         else ! non-free surface (SOM)
 
@@ -1633,12 +2064,13 @@ contains
         if (config_use_column_biogeochemistry) then
            oceanAlgaeConc(1,i)           = x2i_i % rAttr(index_x2i_So_algae1, n)
            oceanAlgaeConc(2,i)           = x2i_i % rAttr(index_x2i_So_algae2, n)
-           oceanAlgaeConc(3,i)           = x2i_i % rAttr(index_x2i_So_algae3, n)
-           oceanDOCConc(1,i)             = x2i_i % rAttr(index_x2i_So_doc1, n)
-           oceanDOCConc(2,i)             = x2i_i % rAttr(index_x2i_So_doc2, n)
+           oceanAlgaeConc(3,i)           = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_algae3, n)
+           oceanDOCConc(1,i)             = x2i_i % rAttr(index_x2i_So_doc1, n) * DOCPoolFractions(1)
+           oceanDOCConc(2,i)             = x2i_i % rAttr(index_x2i_So_doc2, n) * DOCPoolFractions(2)
            oceanDOCConc(3,i)             = 0.0_RKIND
-           oceanDICConc(1,i)             = x2i_i % rAttr(index_x2i_So_dic1, n) !JW not used, set to 0?
-           oceanDONConc(1,i)             = x2i_i % rAttr(index_x2i_So_don1, n)
+           oceanDICConc(1,i)             = x2i_i % rAttr(index_x2i_So_dic1, n)
+           oceanDONConc(1,i)             = x2i_i % rAttr(index_x2i_So_doc3, n) * DOCPoolFractions(3) &
+              /carbonToNitrogenRatioDON(1)
            oceanNitrateConc(i)           = x2i_i % rAttr(index_x2i_So_no3, n)
            oceanSilicateConc(i)          = x2i_i % rAttr(index_x2i_So_sio3, n)
            oceanAmmoniumConc(i)          = x2i_i % rAttr(index_x2i_So_nh4, n)
@@ -1649,12 +2081,12 @@ contains
            oceanParticulateIronConc(2,i) = x2i_i % rAttr(index_x2i_So_fep2, n)
            oceanDissolvedIronConc(1,i)   = x2i_i % rAttr(index_x2i_So_fed1, n)
            oceanDissolvedIronConc(2,i)   = x2i_i % rAttr(index_x2i_So_fed2, n)
-           oceanZAerosolConc(1,i)        = x2i_i % rAttr(index_x2i_So_zaer1, n) !JW not used, set to 0?
-           oceanZAerosolConc(2,i)        = x2i_i % rAttr(index_x2i_So_zaer2, n) !JW not used, set to 0?
-           oceanZAerosolConc(3,i)        = x2i_i % rAttr(index_x2i_So_zaer3, n) !JW not used, set to 0?
-           oceanZAerosolConc(4,i)        = x2i_i % rAttr(index_x2i_So_zaer4, n) !JW not used, set to 0?
-           oceanZAerosolConc(5,i)        = x2i_i % rAttr(index_x2i_So_zaer5, n) !JW not used, set to 0?
-           oceanZAerosolConc(6,i)        = x2i_i % rAttr(index_x2i_So_zaer6, n) !JW not used, set to 0?
+           oceanZAerosolConc(1,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer1, n)
+           oceanZAerosolConc(2,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer2, n)
+           oceanZAerosolConc(3,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer3, n)
+           oceanZAerosolConc(4,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer4, n)
+           oceanZAerosolConc(5,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer5, n)
+           oceanZAerosolConc(6,i)        = 0.0_RKIND !x2i_i % rAttr(index_x2i_So_zaer6, n)
            ! set aerosols, if configured
            if (config_use_zaerosols) then
               if (config_use_modal_aerosols) then
@@ -1688,16 +2120,14 @@ contains
         endif
       end do
 
-!----------------------------------------------------------------------- 
+!-----------------------------------------------------------------------
 !
 !  unit conversions and any manipulation of coupled fields
 !
 !-----------------------------------------------------------------------
       do i = 1, nCellsSolve
+
         seaSurfaceTemperature(i)  = seaSurfaceTemperature(i) - seaiceFreshWaterFreezingPoint
-        seaFreezingTemperature(i) = -1.8_RKIND                 ! hardwired for NCOM
-             !         Tf (i,j,iblk) = -depressT*sss(i,j,iblk)       ! freezing temp (C)
-             !         Tf (i,j,iblk) = -depressT*max(sss(i,j,iblk),ice_ref_salinity)
 
         if (config_use_column_biogeochemistry) then
            ! convert from mmol C/m^3 to mmol N/m^3
@@ -1722,6 +2152,7 @@ contains
    call mpas_pool_get_field(oceanCoupling, 'seaSurfaceSalinity', seaSurfaceSalinityField)
    call mpas_pool_get_field(oceanCoupling, 'seaFreezingTemperature', seaFreezingTemperatureField)
    call mpas_pool_get_field(oceanCoupling, 'freezingMeltingPotential', freezingMeltingPotentialField)
+   call mpas_pool_get_field(oceanCoupling, 'frazilMassAdjust', frazilMassAdjustField)
    call mpas_pool_get_field(oceanCoupling, 'uOceanVelocity', uOceanVelocityField)
    call mpas_pool_get_field(oceanCoupling, 'vOceanVelocity', vOceanVelocityField)
    call mpas_pool_get_field(oceanCoupling, 'seaSurfaceTiltU', seaSurfaceTiltUField)
@@ -1774,6 +2205,7 @@ contains
    call mpas_dmpar_exch_halo_field(seaSurfaceSalinityField)
    call mpas_dmpar_exch_halo_field(seaFreezingTemperatureField)
    call mpas_dmpar_exch_halo_field(freezingMeltingPotentialField)
+   call mpas_dmpar_exch_halo_field(frazilMassAdjustField)
    call mpas_dmpar_exch_halo_field(uOceanVelocityField)
    call mpas_dmpar_exch_halo_field(vOceanVelocityField)
    call mpas_dmpar_exch_halo_field(seaSurfaceTiltUField)
@@ -1818,6 +2250,8 @@ contains
       endif
    endif
 
+! REVISION HISTORY:
+! Revised Andrew Roberts May 2021
 !-----------------------------------------------------------------------
 !EOC
 
@@ -1875,8 +2309,10 @@ contains
       velocitySolver,   &
       shortwave,        &
       atmosCoupling,    &
+      oceanCoupling,    &
       atmosFluxes,      &
       oceanFluxes,      &
+      icebergFluxes,    &
       biogeochemistry
 
    integer, pointer :: &
@@ -1886,7 +2322,8 @@ contains
       config_rotate_cartesian_grid,      &
       config_use_topo_meltponds,         &
       config_use_column_biogeochemistry, &
-      config_use_column_shortwave
+      config_use_column_shortwave,       &
+      config_use_data_icebergs
 
    real(kind=RKIND), pointer :: &
       sphere_radius
@@ -1924,6 +2361,9 @@ contains
       oceanShortwaveFlux,          &
       oceanFreshWaterFlux,         &
       oceanSaltFlux,               &
+      frazilMassAdjust,            &
+      bergFreshwaterFlux,          &
+      bergLatentHeatFlux,          &
       oceanNitrateFlux,            &
       oceanSilicateFlux,           &
       oceanAmmoniumFlux,           &
@@ -1942,7 +2382,7 @@ contains
       oceanParticulateIronFlux,    &
       oceanDissolvedIronFlux
 
-!----------------------------------------------------------------------- 
+!-----------------------------------------------------------------------
 
    errorCode = 0
    n = 0
@@ -1955,12 +2395,14 @@ contains
       call MPAS_pool_get_config(configs, "config_use_topo_meltponds", config_use_topo_meltponds)
       call MPAS_pool_get_config(configs, "config_use_column_biogeochemistry", config_use_column_biogeochemistry)
       call MPAS_pool_get_config(configs, "config_use_column_shortwave", config_use_column_shortwave)
+      call MPAS_pool_get_config(configs, "config_use_data_icebergs", config_use_data_icebergs)
 
       call MPAS_pool_get_subpool(block_ptr % structs, 'mesh', meshPool)
       call MPAS_pool_get_subpool(block_ptr % structs, "tracers_aggregate", tracersAggregate)
       call MPAS_pool_get_subpool(block_ptr % structs, "velocity_solver", velocitySolver)
       call MPAS_pool_get_subpool(block_ptr % structs, "shortwave", shortwave)
       call MPAS_pool_get_subpool(block_ptr % structs, 'atmos_coupling', atmosCoupling)
+      call MPAS_pool_get_subpool(block_ptr % structs, 'ocean_coupling', oceanCoupling)
       call MPAS_pool_get_subpool(block_ptr % structs, "atmos_fluxes", atmosFluxes)
       call MPAS_pool_get_subpool(block_ptr % structs, "ocean_fluxes", oceanFluxes)
 
@@ -1995,6 +2437,8 @@ contains
       call MPAS_pool_get_array(atmosCoupling, 'atmosReferenceTemperature2m', atmosReferenceTemperature2m)
       call MPAS_pool_get_array(atmosCoupling, 'atmosReferenceHumidity2m', atmosReferenceHumidity2m)
 
+      call MPAS_pool_get_array(oceanCoupling, 'frazilMassAdjust', frazilMassAdjust)
+
       call MPAS_pool_get_array(atmosFluxes, 'latentHeatFlux', latentHeatFlux)
       call MPAS_pool_get_array(atmosFluxes, 'sensibleHeatFlux', sensibleHeatFlux)
       call MPAS_pool_get_array(atmosFluxes, 'longwaveUp', longwaveUp)
@@ -2004,6 +2448,13 @@ contains
       call MPAS_pool_get_array(oceanFluxes, 'oceanShortwaveFlux', oceanShortwaveFlux)
       call MPAS_pool_get_array(oceanFluxes, 'oceanFreshWaterFlux', oceanFreshWaterFlux)
       call MPAS_pool_get_array(oceanFluxes, 'oceanSaltFlux', oceanSaltFlux)
+
+      if (config_use_data_icebergs) then
+         call MPAS_pool_get_subpool(block_ptr % structs, "berg_fluxes", icebergFluxes)
+
+         call MPAS_pool_get_array(icebergFluxes, "bergFreshwaterFlux", bergFreshwaterFlux)
+         call MPAS_pool_get_array(icebergFluxes, "bergLatentHeatFlux", bergLatentHeatFlux)
+      endif
 
       if (config_use_column_biogeochemistry) then
          call mpas_pool_get_subpool(block_ptr % structs, 'biogeochemistry', biogeochemistry)
@@ -2076,18 +2527,24 @@ contains
               sphere_radius,        &
               config_rotate_cartesian_grid)
 
-         !-------states-------------------- 
+         !-------states--------------------
          i2x_i % rAttr(index_i2x_Si_ifrac ,n)    = ailohi
+
+         if (config_use_data_icebergs) then
+            i2x_i % rAttr(index_i2x_Fioi_bergw,n) = bergFreshwaterFlux(i)
+            i2x_i % rAttr(index_i2x_Fioi_bergh,n) = bergLatentHeatFlux(i)
+         endif
 
          if ( ailohi > 0.0_RKIND ) then
 
-            !-------states-------------------- 
+            !-------states--------------------
             i2x_i % rAttr(index_i2x_Si_t     ,n)  = Tsrf
             i2x_i % rAttr(index_i2x_Si_bpress,n)  = basalPressure
             i2x_i % rAttr(index_i2x_Si_u10   ,n)  = atmosReferenceSpeed10m(i)
             i2x_i % rAttr(index_i2x_Si_tref  ,n)  = atmosReferenceTemperature2m(i)
             i2x_i % rAttr(index_i2x_Si_qref  ,n)  = atmosReferenceHumidity2m(i)
             i2x_i % rAttr(index_i2x_Si_snowh ,n)  = snowVolumeCell(i) / ailohi
+            i2x_i % rAttr(index_i2x_Si_ithick,n)  = iceVolumeCell(i) / ailohi
 
             !--- a/i fluxes computed by ice
             i2x_i % rAttr(index_i2x_Faii_taux ,n) = tauxa
@@ -2108,11 +2565,13 @@ contains
                i2x_i % rAttr(index_i2x_Faii_swnet,n) = absorbedShortwaveFlux(i)
             endif
 
-            !--- i/o fluxes computed by ice
+            ! i/o fluxes computed by ice, as well as additional freshwater and salt calculated at the last
+            ! coupling import and needed to grow sea ice from frazil passed from the ocean model in the
+            ! field frazilMassAdjust.
             i2x_i % rAttr(index_i2x_Fioi_melth,n) = oceanHeatFlux(i)
             i2x_i % rAttr(index_i2x_Fioi_swpen,n) = oceanShortwaveFlux(i)
-            i2x_i % rAttr(index_i2x_Fioi_meltw,n) = oceanFreshWaterFlux(i)
-            i2x_i % rAttr(index_i2x_Fioi_salt ,n) = oceanSaltFlux(i)
+            i2x_i % rAttr(index_i2x_Fioi_meltw,n) = oceanFreshWaterFlux(i) + frazilMassAdjust(i)/ailohi
+            i2x_i % rAttr(index_i2x_Fioi_salt ,n) = oceanSaltFlux(i) + ice_ref_salinity*p001*frazilMassAdjust(i)/ailohi
             i2x_i % rAttr(index_i2x_Fioi_taux ,n) = tauxo
             i2x_i % rAttr(index_i2x_Fioi_tauy ,n) = tauyo
 
@@ -2124,7 +2583,7 @@ contains
                i2x_i % rAttr(index_i2x_Fioi_algae3,n) = oceanAlgaeFlux(3,i) * carbonToNitrogenRatioAlgae(3)
                i2x_i % rAttr(index_i2x_Fioi_doc1  ,n) = oceanDOCFlux(1,i)
                i2x_i % rAttr(index_i2x_Fioi_doc2  ,n) = oceanDOCFlux(2,i)
-               i2x_i % rAttr(index_i2x_Fioi_doc3  ,n) = oceanDOCFlux(3,i) !JW set to 0?
+               i2x_i % rAttr(index_i2x_Fioi_doc3  ,n) = oceanDONFlux(1,i) * carbonToNitrogenRatioDON(1)
                i2x_i % rAttr(index_i2x_Fioi_dic1  ,n) = oceanDICFlux(1,i)
                i2x_i % rAttr(index_i2x_Fioi_don1  ,n) = oceanDONFlux(1,i)
                i2x_i % rAttr(index_i2x_Fioi_no3   ,n) = oceanNitrateFlux(i)
@@ -2146,6 +2605,8 @@ contains
       block_ptr => block_ptr % next
    enddo
 
+! REVISION HISTORY:
+! Revised Andrew Roberts May 2021
 !-----------------------------------------------------------------------
 !EOC
 
@@ -2177,7 +2638,7 @@ contains
       else
           write(histAtt, '(A,I6,A,A,A)') 'mpirun -n ', domain % dminfo % nProcs, ' ./', trim(domain % core % coreName), '_model'
       end if
-     
+
 
       call MPAS_stream_mgr_add_att(domain % streamManager, 'on_a_sphere', domain % on_a_sphere)
       call MPAS_stream_mgr_add_att(domain % streamManager, 'sphere_radius', domain % sphere_radius)
@@ -2187,7 +2648,6 @@ contains
       ! add a shortened version.
 !     call MPAS_stream_mgr_add_att(domain % streamManager, 'history', domain % history)
       call MPAS_stream_mgr_add_att(domain % streamManager, 'history', histAtt)
-      call MPAS_stream_mgr_add_att(domain % streamManager, 'source', domain % core % source)
       call MPAS_stream_mgr_add_att(domain % streamManager, 'Conventions', domain % core % Conventions)
       call MPAS_stream_mgr_add_att(domain % streamManager, 'parent_id', domain % parent_id)
       call MPAS_stream_mgr_add_att(domain % streamManager, 'mesh_spec', domain % mesh_spec)
@@ -2282,14 +2742,18 @@ contains
 !***********************************************************************
 !BOP
 !
-! !IROUTINE: freezing_potential
+! !IROUTINE: frazil_mass
 !
-! !INTERFACE:
-   subroutine freezing_potential(freezingPotential, frazilProduction, seaSurfaceSalinity, &
+! !INTERFACE
+   subroutine frazil_mass(freezingPotential, frazilMassFlux, seaSurfaceSalinity, &
                                  config_thermodynamics_type)
 !
 ! !DESCRIPTION:
-! Calculate freezing potential for a cell
+! Calculate frazil mass based on on the sea surface salinity, and frazil heat flux
+! from the ocean, otherwise referred to as to as the freeze-melt potential. When
+! freezingPotential is positive, it gives the heat flux, according to the ocean model
+! associated with the frazil mass passed from the ocean.  This function calculates
+! the frazil mass based on the freezingPotential according to sea ice model thermodynamics,
 !
 ! !USES:
       use ice_mushy_physics, only:  &
@@ -2301,12 +2765,12 @@ contains
          phi_init
 
 ! !INPUT PARAMETERS:
-      real (kind=RKIND),      intent(in)  :: frazilProduction
-      real (kind=RKIND),      intent(in)  :: seaSurfaceSalinity
-      character(len=strKIND), intent(in)  :: config_thermodynamics_type
+      real (kind=RKIND),      intent(in)   :: freezingPotential
+      real (kind=RKIND),      intent(in)   :: seaSurfaceSalinity
+      character(len=strKIND), intent(in)   :: config_thermodynamics_type
 
 ! !OUTPUT PARAMETERS:
-      real (kind=RKIND),      intent(out) :: freezingPotential
+      real (kind=RKIND),      intent(out)  :: frazilMassFlux
 
 !EOP
 !BOC
@@ -2322,7 +2786,7 @@ contains
       vi0new
 
 
-   if (frazilProduction > 0.0_RKIND) then
+   if (freezingPotential > 0.0_RKIND) then
 
       if (trim(config_thermodynamics_type) == "mushy") then  ! mushy
          if (seaSurfaceSalinity > 2.0_RKIND * dSin0_frazil) then
@@ -2330,25 +2794,77 @@ contains
          else
              Si0new = seaSurfaceSalinity**2 / (4.0_RKIND*dSin0_frazil)
          endif
-         Ti = min(liquidus_temperature_mush(Si0new/phi_init), -0.1_RKIND)
+         Ti = liquidus_temperature_mush(Si0new/phi_init)
          qi0new = enthalpy_mush(Ti, Si0new)
       else
          qi0new = -seaiceDensityIce*seaiceLatentHeatMelting
       endif    ! ktherm
 
-      vi0new = max (frazilProduction, 0.0_RKIND) / seaiceDensityIce
-      freezingPotential = -vi0new*qi0new ! note sign convention, qi < 0
+      frazilMassFlux = -freezingPotential*seaiceDensityIce/qi0new
 
    else
 
-      freezingPotential = 0.0_RKIND
+      frazilMassFlux = 0.0_RKIND
 
    endif
+
+! REVISION HISTORY:
+! Revised Andrew Roberts May 2021
+!-----------------------------------------------------------------------
+!EOC
+
+   end subroutine frazil_mass!}}}
+
+!***********************************************************************
+!BOP
+!
+! !IROUTINE: datetime
+!
+! !INTERFACE:
+   subroutine datetime(cdate, ctime)
+!
+! !DESCRIPTION:
+! Calculate current date and time for metadata history
+!
+! !USES:
+
+! !INPUT PARAMETERS:
+      character(len=*), intent(out) :: cdate
+      character(len=*), intent(out) :: ctime
+
+! !OUTPUT PARAMETERS:
+!EOP
+!-----------------------------------------------------------------------
+!
+!  local variables
+!
+!-----------------------------------------------------------------------
+      character(len=strKIND) :: date
+      character(len=strKIND) :: time
+      character(len=strKIND) :: zone
+      integer, dimension(8) :: values
+
+      call date_and_time (date, time, zone, values)
+
+      cdate = ""
+      cdate(1:2) = date(5:6)
+      cdate(3:3) = '/'
+      cdate(4:5) = date(7:8)
+      cdate(6:6) = '/'
+      cdate(7:8) = date(3:4)
+
+      ctime = ""
+      ctime(1:2) = time(1:2)
+      ctime(3:3) = ':'
+      ctime(4:5) = time(3:4)
+      ctime(6:6) = ':'
+      ctime(7:8) = time(5:6)
 
 !-----------------------------------------------------------------------
 !EOC
 
-   end subroutine freezing_potential!}}}
+   end subroutine datetime!}}}
+
 
 end module ice_comp_mct
 

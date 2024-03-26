@@ -76,7 +76,7 @@ module cube_mod
   public  :: cube_assemble
   public  :: vmap,dmap
   public  :: set_corner_coordinates
-  public  :: assign_node_numbers_to_elem
+!  public  :: assign_node_numbers_to_elem
 
 
   public  :: CubeEdgeCount
@@ -84,7 +84,6 @@ module cube_mod
   public  :: CubeSetupEdgeIndex
   public  :: ref2sphere
 
-  public  :: set_area_correction_map0, set_area_correction_map2
 
   ! public interface to REFERECE element map
 #if HOMME_QUAD_PREC
@@ -105,7 +104,7 @@ module cube_mod
   ! ===============================
   private :: coordinates_atomic
   private :: metric_atomic
-  private :: coreolis_init_atomic
+  private :: coriolis_init_atomic
 
 contains
 
@@ -129,7 +128,7 @@ contains
 
     call metric_atomic(elem,gll_points,alpha)
 
-    call coreolis_init_atomic(elem)
+    call coriolis_init_atomic(elem)
 
 
   end subroutine cube_init_atomic
@@ -461,7 +460,10 @@ contains
        elem%D = elem%D * sqrt(alpha)
        elem%Dinv = elem%Dinv / sqrt(alpha)
        elem%metdet = elem%metdet * alpha
-       elem%rmetdet = elem%rmetdet / alpha
+       ! replace "elem%rmetdet = elem%rmetdet / alpha" with the one below,
+       ! to ensure that elem%rmetdet = 1/elem%metdet
+       ! elem%rmetdet = elem%rmetdet / alpha
+       elem%rmetdet = 1.0D0/elem%metdet
        elem%met = elem%met * alpha
        elem%metinv = elem%metinv / alpha
     elseif( cubed_sphere_map == 2 ) then
@@ -471,7 +473,7 @@ contains
            elem%D(i,j,:,:) = elem%D(i,j,:,:) * sqrt(alpha)
            elem%Dinv(i,j,:,:) = elem%Dinv(i,j,:,:) / sqrt(alpha)
            elem%metdet(i,j) = elem%metdet(i,j) * alpha
-           elem%rmetdet(i,j) = elem%rmetdet(i,j) / alpha
+           elem%rmetdet(i,j) = 1.0D0/elem%metdet(i,j)
            elem%met(i,j,:,:) = elem%met(i,j,:,:) * alpha
            elem%metinv(i,j,:,:) = elem%metinv(i,j,:,:) / alpha
          enddo
@@ -692,8 +694,6 @@ contains
   ! maps quads on the sphere directly to the reference element
   ! ========================================================
   subroutine dmap_elementlocal(D, a,b, corners3D)
-    use element_mod, only : element_t
-
     real (kind=real_kind), intent(out)    :: D(2,2)
     real (kind=real_kind), intent(in)     :: a,b
     type (cartesian3d_t)               ::  corners3D(4)   
@@ -765,13 +765,13 @@ contains
 
 
   ! ========================================
-  ! coreolis_init_atomic:
+  ! coriolis_init_atomic:
   !
-  ! Initialize coreolis term ...
+  ! Initialize coriolis term ...
   !
   ! ========================================
 
-  subroutine coreolis_init_atomic(elem)
+  subroutine coriolis_init_atomic(elem)
     use element_mod, only : element_t
     use physical_constants, only : omega
 
@@ -796,7 +796,7 @@ contains
        end do
     end do
 
-  end subroutine coreolis_init_atomic
+  end subroutine coriolis_init_atomic
 
 
   subroutine set_corner_coordinates(elem)
@@ -850,7 +850,7 @@ contains
 #endif
   end subroutine set_corner_coordinates
 
-
+#if 0
   subroutine assign_node_numbers_to_elem(elements, GridVertex)
     use element_mod,    only : element_t
     use control_mod,    only : north, south, east, west, neast, seast, swest, nwest
@@ -927,6 +927,7 @@ contains
 !      elements(el)%node_numbers = connectivity(elements(el)%vertex%number, :)
 !    end do
   end subroutine assign_node_numbers_to_elem
+#endif
 
 
   ! ================================================
@@ -1895,7 +1896,7 @@ contains
 !  equi-angular cubed-sphere mapping for non-cubed sphere grids, hence the 
 !  need for a new map)
 !
-  function ref2sphere_double(a,b, corners3D, ref_map, corners, facenum) result(sphere)
+  function ref2sphere_double(a,b, corners3D, ref_map, corners, facenum, cart) result(sphere)
     real(kind=real_kind)    :: a,b
     type (spherical_polar_t)      :: sphere
     type (cartesian3d_t)            :: corners3D(4)
@@ -1903,6 +1904,7 @@ contains
     ! only needed for gnominic maps
     type (cartesian2d_t), optional  :: corners(4)  
     integer, optional               :: facenum    
+    type (cartesian3D_t), optional  :: cart ! cartesian equivalent of 'sphere'
 
 
     if (ref_map==0) then
@@ -1913,19 +1915,20 @@ contains
 !       sphere = ref2sphere_gnomonic_double(a,b,corners,face_no)
        call abortmp('gnomonic map not yet coded')
     elseif (ref_map==2) then
-       sphere = ref2sphere_elementlocal_double(a,b,corners3D)
+       sphere = ref2sphere_elementlocal_double(a,b,corners3D,cart)
     else
        call abortmp('ref2sphere_double(): bad value of ref_map')
     endif
   end function
 
-  function ref2sphere_longdouble(a,b, corners3D, ref_map, corners, facenum) result(sphere)
+  function ref2sphere_longdouble(a,b, corners3D, ref_map, corners, facenum, cart) result(sphere)
     real(kind=longdouble_kind)    :: a,b
     type (spherical_polar_t)      :: sphere
     type (cartesian3d_t)          :: corners3D(4)
     type (cartesian2d_t), optional  :: corners(4)
     integer, optional               :: facenum
     integer :: ref_map
+    type (cartesian3D_t), optional  :: cart
 
     if (ref_map==0) then
        if (.not. present(corners) ) &
@@ -1935,7 +1938,7 @@ contains
 !       sphere = ref2sphere_gnomonic_longdouble(a,b,corners,face_no)
        call abortmp('gnomonic map not yet coded')
     elseif (ref_map==2) then
-       sphere = ref2sphere_elementlocal_longdouble(a,b,corners3D)
+       sphere = ref2sphere_elementlocal_longdouble(a,b,corners3D,cart)
     else
        call abortmp('ref2sphere_double(): bad value of ref_map')
     endif
@@ -1973,7 +1976,6 @@ contains
          + pi*qj*corners(4)%y 
     ! map from [pi/2,pi/2] equ angular cube face to sphere:   
     sphere=projectpoint(cart,face_no)
-
   end function ref2sphere_equiangular_double
 
 
@@ -2009,7 +2011,6 @@ contains
          + pi*qj*corners(4)%y 
     ! map from [pi/2,pi/2] equ angular cube face to sphere:   
     sphere=projectpoint(cart,face_no)
-
   end function ref2sphere_equiangular_longdouble
 
 
@@ -2031,36 +2032,39 @@ contains
 ! is to utilize a map (X,Y,X) --> (X,Y,Z)/SQRT(X**2+Y**2+Z**2) to
 ! project the quad to the unit sphere.
 ! -----------------------------------------------------------------------------------------
-  function ref2sphere_elementlocal_double(a,b, corners3D) result(sphere)
+  function ref2sphere_elementlocal_double(a,b, corners3D, cart) result(sphere)
     use element_mod, only : element_t
     implicit none
     real(kind=real_kind)    :: a,b
     type (cartesian3d_t)          :: corners3D(4)
     type (spherical_polar_t)      :: sphere
+    type (cartesian3D_t), optional  :: cart
     real(kind=real_kind)               ::  q(4) ! local
 
     q(1)=(1-a)*(1-b); q(2)=(1+a)*(1-b); q(3)=(1+a)*(1+b); q(4)=(1-a)*(1+b);
     q=q/4.0d0;
-    sphere=ref2sphere_elementlocal_q(q,corners3D)
+    sphere=ref2sphere_elementlocal_q(q,corners3D,cart)
   end function 
-  function ref2sphere_elementlocal_longdouble(a,b, corners3D) result(sphere)
+  function ref2sphere_elementlocal_longdouble(a,b, corners3D, cart) result(sphere)
     use element_mod, only : element_t
     implicit none
     real(kind=longdouble_kind)    :: a,b
     type (cartesian3d_t)          :: corners3D(4)
     type (spherical_polar_t)      :: sphere
+    type (cartesian3D_t), optional  :: cart
     real(kind=real_kind)               ::  q(4) ! local
 
     q(1)=(1-a)*(1-b); q(2)=(1+a)*(1-b); q(3)=(1+a)*(1+b); q(4)=(1-a)*(1+b);
     q=q/4.0d0;
-    sphere=ref2sphere_elementlocal_q(q,corners3D)
+    sphere=ref2sphere_elementlocal_q(q,corners3D,cart)
   end function 
 
-  function ref2sphere_elementlocal_q(q, corners) result(sphere)
+  function ref2sphere_elementlocal_q(q, corners, cart_out) result(sphere)
     implicit none
     real(kind=real_kind)          :: q(4)
     type (spherical_polar_t)      :: sphere
     type (cartesian3d_t)          :: corners(4)
+    type (cartesian3D_t), optional  :: cart_out
     ! local
     type (cartesian3d_t)                 :: cart   
     real(kind=real_kind)               ::  c(3,4),  xx(3), r
@@ -2086,149 +2090,8 @@ contains
 !XYZ coords of the point to lon/lat
     sphere=change_coordinates(cart)
 
+    if (present(cart_out)) cart_out = cart
   end function 
-
-
-  subroutine set_area_correction_map0(elem, nelemd, par, gp)
-! Numerical area of the domain (sphere) is sum of integration weights. The sum
-! is not exactly equal geometric area (4\pi R). It is required that 
-! numerical area = geometric area.  
-! This correction 'butters' 
-! the difference between numerical and geometrical areas evenly among DOFs. Then
-! geometric areas of individual elements still do not equal their numerical areas,
-! only whole domain's areas coinside.
-
-
-#ifndef CAM
-    use repro_sum_mod,      only: repro_sum
-#else
-    use shr_reprosum_mod,   only: repro_sum => shr_reprosum_calc
-#endif
-
-    use quadrature_mod,   only: quadrature_t
-    use element_mod, only: element_t
-    use parallel_mod, only: parallel_t
-    use kinds, only: iulog
-    use control_mod, only: topology
-
-    implicit none
-
-    type (element_t),   pointer, intent(inout)     :: elem(:)
-    type (parallel_t),  intent(in)  :: par
-    integer, intent(in) :: nelemd
-    type (quadrature_t), intent(in)   :: gp
-
-    real(kind=real_kind) :: aratio(nelemd,1)
-    real(kind=real_kind) :: area(1)
-    integer :: ie, i, j
-
-    if ( topology == "cube" ) then
-       area = 0.0d0
-       do ie=1,nelemd
-          aratio(ie,1) = sum(elem(ie)%mp(:,:)*elem(ie)%metdet(:,:))
-       enddo
-
-       call repro_sum(aratio, area, nelemd, nelemd, 1, commid=par%comm)
-       area(1) = 4*dd_pi/area(1)  ! ratio correction
-
-       if (par%masterproc) &
-          write(iulog,'(a,f20.17)') " re-initializing cube elements: alpha area correction=",&
-          area(1)
-
-       do ie=1,nelemd
-          call cube_init_atomic(elem(ie),gp%points,area(1))
-       enddo
-    endif ! end of topology == 'cube'
-
-  end subroutine set_area_correction_map0
-
-
-  subroutine set_area_correction_map2(elem, nelemd, par, gp)
-! Numerical area of the domain (sphere) is sum of integration weights. The sum
-! is not exactly equal geometric area (4\pi R). It is required that 
-! numerical area = geometric area.  
-! The 'epsilon bubble' approach modifies inner weights in each element so that
-! geometic and numerical areas of each element match.
-#ifndef CAM
-    use repro_sum_mod,      only: repro_sum
-#else
-    use shr_reprosum_mod,   only: repro_sum => shr_reprosum_calc
-#endif
-
-    use quadrature_mod,   only: quadrature_t
-    use element_mod, only: element_t
-    use parallel_mod, only: parallel_t
-    use kinds, only: iulog
-    use control_mod, only: topology
-
-    implicit none
-
-    type (element_t),   pointer, intent(inout)     :: elem(:)
-    type (parallel_t),  intent(in)  :: par
-    integer, intent(in) :: nelemd
-    type (quadrature_t), intent(in)   :: gp
-
-    real(kind=real_kind) :: aratio(nelemd,1)
-    real(kind=real_kind) :: area(1), area_sphere, area_num, area_dummy,sum_w, delta
-    integer :: ie, i, j
-    real(kind=real_kind) :: tol_local = 1e-15
-
-    if ( topology == "cube" ) then
-       do ie=1,nelemd
-          ! Obtain area of element = sum of areas of 2 triangles.
-          call sphere_tri_area(elem(ie)%corners3D(1), elem(ie)%corners3D(2),&
-                               elem(ie)%corners3D(3), area_sphere)
-          call sphere_tri_area(elem(ie)%corners3D(1), elem(ie)%corners3D(3),&
-                               elem(ie)%corners3D(4), area_dummy)
-          ! Store element's area in area_sphere.
-          area_sphere = area_sphere + area_dummy
-
-          ! Compute 'numerical area' of the element as sum of integration
-          ! weights.
-          area_num = 0.0d0
-          do j = 1,np
-             do i = 1,np
-                area_num = area_num + gp%weights(i)*gp%weights(j)*elem(ie)%metdet(i,j)
-             enddo
-          enddo
-
-          ! Compute sum of inner integration weights for correction.
-          sum_w = 0.0d0 ! or sum_w = sum(elem(ie)%mp(2:np-1,2:np-1)*elem(ie)%metdet(2:np-1,2:np-1))
-          do j = 2, np-1
-             do i = 2, np-1
-                sum_w = sum_w + gp%weights(i)*gp%weights(j)*elem(ie)%metdet(i,j)
-             enddo
-          enddo
-          ! Which tol is to use here?
-          if ( sum_w > tol_local ) then
-             delta = (area_sphere - area_num)/sum_w
-             call cube_init_atomic(elem(ie),gp%points,1.0d0 + delta)
-             else
-                ! Abort since the denominator in correction is too small.
-                call abortmp('Cube_mod,set_area_correction_map2(): sum_w is too small.')
-             endif
-          enddo ! loop over elements
-          ! code for verification.
-          area = 0.0d0
-          do ie = 1,nelemd
-             aratio(ie,1) = 0.0
-             do j = 1,np
-                do i = 1,np
-                   aratio(ie,1) = aratio(ie,1) + gp%weights(i)*gp%weights(j)*elem(ie)%metdet(i,j)
-                enddo
-             enddo
-          enddo
-
-          call repro_sum(aratio, area, nelemd, nelemd, 1, commid=par%comm)
-          if (par%masterproc) &
-             write(iulog,'(a,f20.17)') "Epsilon bubble correction: Corrected area - 4\pi ",area(1) - 4.0d0*dd_pi
-
-       endif ! end of topology == 'cube'
-
-  end subroutine set_area_correction_map2
-
-
-
 
 end module cube_mod
 
