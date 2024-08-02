@@ -345,6 +345,7 @@ contains
      integer                                        :: pass_ch4
      integer                                        :: pass_ed_prescribed_phys
      integer                                        :: pass_planthydro
+     integer                                        :: pass_IMAPinsect
      integer                                        :: pass_inventory_init
      integer                                        :: pass_is_restart
      integer                                        :: pass_cohort_age_tracking
@@ -495,6 +496,13 @@ contains
            pass_planthydro = 0
         end if
         call set_fates_ctrlparms('use_planthydro',ival=pass_planthydro)
+        
+	if(use_fates_insect) then
+           pass_IMAPinsect = 1
+        else
+           pass_IMAPinsect = 0
+        end if
+        call set_fates_ctrlparms('use_IMAPinsect',ival=pass_IMAPinsect)
 
         if(use_fates_cohort_age_tracking) then
            pass_cohort_age_tracking = 1
@@ -748,6 +756,14 @@ contains
          if (use_fates_planthydro) then
             call InitHydrSites(this%fates(nc)%sites,this%fates(nc)%bc_in)
          end if
+        if (use_fates_planthydro) then
+            call InitHydrSites(this%fates(nc)%sites,this%fates(nc)%bc_in)
+         end if
+       ! if (use_fates_insect) then
+       !	call wrap_insects(this, bounds_clump, fn, filterp, &
+       !  	esat_tv, eair, oair, cair, rb, dayl_factor,             &
+       !  	atm2lnd_inst, temperature_inst, canopystate_inst, photosyns_inst)
+       ! end if
 
          if( this%fates(nc)%nsites == 0 ) then
             write(iulog,*) 'Clump ',nc,' had no valid FATES sites'
