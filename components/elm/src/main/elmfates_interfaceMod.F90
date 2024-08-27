@@ -502,7 +502,7 @@ contains
         else
            pass_IMAPinsect = 0
         end if
-        call set_fates_ctrlparms('use_IMAPinsect',ival=pass_IMAPinsect)
+        call set_fates_ctrlparms('use_insect',ival=pass_IMAPinsect)
 
         if(use_fates_cohort_age_tracking) then
            pass_cohort_age_tracking = 1
